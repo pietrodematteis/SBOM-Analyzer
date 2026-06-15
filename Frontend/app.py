@@ -3,222 +3,198 @@ import requests
 import pandas as pd
 import json
 
-st.set_page_config(
-    page_title="TLSAssistant SBOM Analyzer",
-    layout="wide"
-)
-
-st.title("TLSAssistant - SBOM & Dependency Analyzer")
+st.set_page_config(page_title="TLSAssistant Flow", layout="wide")
+st.title("🛡️ TLSAssistant - SBOM Analyzer")
 
 BACKEND_URL = "http://127.0.0.1:8000"
 
-# ============================================================
-# INSERIMENTO REPOSITORY DI INPUT 
-# ============================================================
-st.subheader("1. Configurazione Target")
-repo_url = st.text_input(
-    "GitHub Repository URL da analizzare", 
-    placeholder="https://github.com/owner/repo"
-)
-
-branch = st.text_input(
-    "Branch della Repository", 
-    value="main"
-)
-
-st.markdown("---")
+# Stato di Streamlit per ricordarsi se la Fase 1 è completata
+if "sbom_ready" not in st.session_state:
+    st.session_state.sbom_ready = False
 
 # ============================================================
-# SCELTA SBOM STATICO (SÌ / NO) o UPLOAD FILE MANUALI
+# STEP 1 & 2: REPO E ACQUISIZIONE SBOM (SALVATAGGIO SERVER)
 # ============================================================
-st.subheader("2. Opzioni di Analisi")
+st.subheader("1. Configurazione Target & SBOM di Base")
+repo_url = st.text_input("GitHub Repository URL", placeholder="https://github.com/owner/repo")
+branch = st.text_input("Branch", value="main")
 
-# Inizializzazione parametri dinamici di default
-format_type = "entrambi"
-requirements_file = None
-poetry_file = None
-
-# Scelta della modalità operativa
-sbom_generation_choice = st.radio(
-    "Vuoi generare lo SBOM statico (requirements.txt e poetry.lock) tramite GitHub Actions o fornire direttamente i file di dipendenze?",
-    ["Genera SBOM Statico", "Fornisci File Dipendenze"],
-    index=0,
+sbom_choice = st.radio(
+    "Scegli l'origine dello SBOM di base:",
+    ["Genera SBOM Statico da zero", "Carica file SBOM esistenti"],
     horizontal=True
 )
 
-if sbom_generation_choice == "Genera SBOM Statico":
-    format_type = st.radio(
-        "Seleziona cosa scansionare per lo SBOM statico:",
-        ["Requirements", "Poetry", "Entrambi"],
-        index=2,
-        horizontal=True
-    ).lower()
-else:
-    st.markdown("### 📤 Caricamento File di Dipendenze Locali")
-    
+requirements_file = None
+poetry_file = None
+format_file = "entrambi" # Default value
+
+if sbom_choice == "Carica file SBOM esistenti":
     col1, col2 = st.columns(2)
-    
     with col1:
-        requirements_file = st.file_uploader(
-            "Carica SBOM per Requirements",
-            type=["txt", "json"],
-            key="req_uploader"
-        )
-        
+        requirements_file = st.file_uploader("Carica JSON Requirements", type=["json"])
     with col2:
-        poetry_file = st.file_uploader(
-            "Carica SBOM per Poetry",
-            type=["lock", "json"],
-            key="poetry_uploader"
-        )
-    
+        poetry_file = st.file_uploader("Carica JSON Poetry", type=["json"])
+elif sbom_choice == "Genera SBOM Statico da zero":
+    format_type = st.selectbox(
+        "Seleziona il formato da generare tramite la pipeline:",
+        options=["entrambi", "requirements", "poetry"],
+        format_func=lambda x: x.capitalize()
+    )
+    format_file = format_type
+
+if st.button("🔄 Invia e Mantieni in Memoria sul Server"):
+    if not repo_url:
+        st.error("Inserisci la URL della repo.")
+        st.stop()
+        
+    with st.spinner("Salvataggio file sul server..."):
+        try:
+            if sbom_choice == "Genera SBOM Statico da zero":
+                res = requests.post(f"{BACKEND_URL}/upload-sbom", data={"action": "generate"})
+            else:
+                files = {}
+                if requirements_file: files["requirements_file"] = requirements_file.getvalue()
+                if poetry_file: files["poetry_file"] = poetry_file.getvalue()
+                res = requests.post(f"{BACKEND_URL}/upload-sbom", data={"action": "upload", "format": format_file}, files=files)
+                
+            if res.status_code == 200:
+                st.session_state.sbom_ready = True
+                st.success(res.json().get("message"))
+            else:
+                st.error(f"Errore server: {res.text}")
+        except Exception as e:
+            st.error(f"Errore di connessione: {str(e)}")
 
 st.markdown("---")
 
-
-st.subheader("3. File dipendenze dinamiche")
-path_dipendenze = st.text_input(
-    "Specifica il percorso o il nome del file di dipendenze all'interno della repo:",
-    value="dependencies.json",
-)
-
-path_dipendenze = path_dipendenze.strip() # Rimuove spazi bianchi superflui
-
 # ============================================================
-# AVVIO PROCESSO DI ANALISI
+# STEP 3 & 4: INPUT DINAMICO E TABELLA DI CONFRONTO
 # ============================================================
-if st.button("Avvia Analisi"):
-    if not repo_url:
-        st.error("Inserisci l'URL di una repository GitHub prima di procedere.")
-        st.stop()
-
-    with st.spinner("Comunicazione con il Backend in corso..."):
-        try:
-            response = None
-
-            # ----------------------------------------------------
-            # STRADA A: GENERAZIONE SBOM STATICO (GITHUB ACTIONS)
-            # ----------------------------------------------------
-            if sbom_generation_choice == "Genera SBOM Statico":
-                response = requests.post(
-                    f"{BACKEND_URL}/analyze-static",
+if st.session_state.sbom_ready:
+    st.subheader("2. Analisi Comparativa Dinamica")
+    
+    path_dipendenze = st.text_input(
+        "Nome del file delle dipendenze dinamiche nella repo:",
+        value="dependencies.json"
+    ).strip()
+    
+    if st.button("📊 Genera Tabella di Confronto Finale"):
+        with st.spinner("Clonazione repo e calcolo matrice in corso..."):
+            try:
+                res = requests.post(
+                    f"{BACKEND_URL}/compare-dependencies",
                     params={
                         "repo_url": repo_url,
                         "branch": branch,
-                        "format_type": format_type
-                    }
-                )
-
-            # ----------------------------------------------------
-            # STRADA B: PARSING DEI FILE FORNITI MANUALMENTE
-            # ----------------------------------------------------
-            else:
-                # Costruiamo il dizionario multipart dei file solo se l'utente li ha caricati
-                upload_files = {}
-                
-                if requirements_file is not None:
-                    upload_files["requirements_file"] = (
-                        requirements_file.name,
-                        requirements_file.getvalue(),
-                        "application/octet-stream"
-                    )
-                
-                if poetry_file is not None:
-                    upload_files["poetry_file"] = (
-                        poetry_file.name,
-                        poetry_file.getvalue(),
-                        "application/octet-stream"
-                    )
-
-                if not upload_files:
-                    st.error("Carica almeno uno dei due file (Requirements o Poetry) prima di avviare l'analisi manuale.")
-                    st.stop()
-
-                response = requests.post(
-                    f"{BACKEND_URL}/analyze-files", 
-                    params={
-                        "repo_url": repo_url,
-                        "branch": branch
+                        "path_dipendenze": path_dipendenze,
                     },
-                    files=upload_files
                 )
 
-            # Controllo risposta HTTP dal backend
-            if response is None or response.status_code != 200:
-                st.error(f"Errore restituito dal server: {response.text if response else 'Nessuna risposta'}")
-                st.stop()
+                if res.status_code == 200:
+                    result = res.json()
+                    dependencies = result.get("result", [])
+                    git_repos = [
+                        item["url"]
+                        for item in dependencies
+                        if item.get("url") and "github.com" in item["url"]
+                    ]
+                    comparison_report = result.get("comparison_matrix", None)
 
-            result = response.json()
-            
-            if result.get("status") == "error":
-                st.error(result.get("message", "Errore durante l'elaborazione del backend."))
-                st.stop()
+                    st.subheader("📊 Risultati dell'Analisi")
 
-            st.success("Analisi completata con successo!")
+                    tab_labels = [
+                        f"📦 Componenti Rilevati ({len(dependencies)})",
+                        "🔗 Link GitHub Sorgenti",
+                    ]
+                    if comparison_report:
+                        tab_labels.append("🔍 Matrice di Confronto (Pipeline)")
+                    tab_labels.append("📄 JSON Grezzo Export")
 
-            # ====================================================
-            # VISUALIZZAZIONE RISULTATI 
-            # ====================================================
-            st.subheader("📊 Risultati dell'Analisi")
-            
-            dependencies = result.get("dependencies", [])
-            git_repos = result.get("detected_git_repos", [])
-            comparison_report = result.get("comparison_matrix", None)
+                    tabs = st.tabs(tab_labels)
 
-            # Costruzione dei Tab dinamici basati sul tipo di risposta ottenuta
-            tab_labels = ["📦 Componenti Rilevati" + f" ({len(dependencies)})", "🔗 Link GitHub Sorgenti"]
-            if comparison_report:
-                tab_labels.append("🔍 Matrice di Confronto (Pipeline)")
-            tab_labels.append("📄 JSON Grezzo Export")
+                    with tabs[0]:
+                        if dependencies:
+                            df = pd.DataFrame(dependencies)
+                            cols_desiderate = [
+                                "type",
+                                "name",
+                                "url",
+                                "present_in_requirements",
+                                "present_in_poetry",
+                            ]
+                            available_cols = [
+                                c for c in cols_desiderate if c in df.columns
+                            ]
+                            df = df[available_cols]
 
-            tabs = st.tabs(tab_labels)
+                            df = df.rename(
+                                columns={
+                                    "type": "Tipo",
+                                    "name": "Componente",
+                                    "url": "Sorgente / PURL",
+                                    "present_in_requirements": "Presente in Requirements (Syft)",
+                                    "present_in_poetry": "Presente in Poetry (Trivy)",
+                                }
+                            )
 
-            # --- TAB 1: ELENCO COMPONENTI ---
-            with tabs[0]:
-                if dependencies:
-                    df = pd.DataFrame(dependencies)
-                    cols_desiderate = ["type", "component_type", "name", "version", "purl", "language", "github_repo"]
-                    available_cols = [c for c in cols_desiderate if c in df.columns]
-                    df = df[available_cols]
-                    
-                    st.dataframe(df, use_container_width=True)
-                    st.download_button(
-                        "⬇️ Scarica Elenco Componenti (JSON)",
-                        json.dumps(dependencies, indent=2),
-                        "dependencies_extracted.json",
-                        "application/json"
-                    )
+                            st.dataframe(df, use_container_width=True)
+                            st.download_button(
+                                "⬇️ Scarica Elenco Componenti (JSON)",
+                                json.dumps(dependencies, indent=2),
+                                "dependencies_extracted.json",
+                                "application/json",
+                            )
+                        else:
+                            st.info(
+                                "Nessuna lista componenti strutturata disponibile."
+                            )
+
+                    with tabs[1]:
+                        if git_repos:
+                            st.markdown(
+                                "### Repository esterne associate alle dipendenze:"
+                            )
+                            for r in sorted(list(set(git_repos))):
+                                if r.startswith("http"):
+                                    st.markdown(f"- [{r}]({r})")
+                                else:
+                                    st.markdown(f"- {r}")
+                        else:
+                            st.info(
+                                "Nessuna repository GitHub mappata come dipendenza diretta."
+                            )
+
+                    current_tab_idx = 2
+                    if comparison_report:
+                        with tabs[2]:
+                            st.markdown(
+                                "### Output di Divergenza Generato dagli Script"
+                            )
+                            if result.get("github_run_url"):
+                                st.markdown(
+                                    f"🌐 [Link alla Run di GitHub Actions]({result.get('github_run_url')})"
+                                )
+                            st.text_area(
+                                "Log di Confronto:",
+                                value=comparison_report,
+                                height=400,
+                            )
+                        current_tab_idx = 3
+
+                    with tabs[current_tab_idx]:
+                        st.code(json.dumps(result, indent=2), language="json")
+                        st.download_button(
+                            "⬇️ Scarica Output SBOM Finale",
+                            json.dumps(result, indent=2),
+                            "sbom_full_output.json",
+                            "application/json",
+                        )
                 else:
-                    st.info("Nessuna lista componenti strutturata disponibile o estratta da questa esecuzione.")
-
-            # --- TAB 2: REPOSITORY SORGENTI IDENTIFICATE ---
-            with tabs[1]:
-                if git_repos:
-                    st.markdown("### Repository esterne associate alle dipendenze:")
-                    for r in git_repos:
-                        st.markdown(f"- 🐙 [{r}]({r})")
-                else:
-                    st.info("Nessuna repository GitHub mappata come dipendenza diretta.")
-
-            # --- TAB 3 (OPZIONALE): MATRICE DI CONFRONTO ---
-            current_tab_idx = 2
-            if comparison_report:
-                with tabs[2]:
-                    st.markdown("### Output di Divergenza Generato dagli Script")
-                    if result.get("github_run_url"):
-                        st.markdown(f"🌐 [Link alla Run di GitHub Actions]({result.get('github_run_url')})")
-                    st.text_area("Log di Confronto:", value=comparison_report, height=400)
-                current_tab_idx = 3
-
-            # --- TAB FINALE: EXPORT COMPLETO DELLO SBOM ---
-            with tabs[current_tab_idx]:
-                st.code(json.dumps(result, indent=2), language="json")
-                st.download_button(
-                    "⬇️ Scarica Output SBOM Finale",
-                    json.dumps(result, indent=2),
-                    "sbom_full_output.json",
-                    "application/json"
-                )
-
-        except requests.exceptions.ConnectionError:
-            st.error("Errore di connessione: il Backend non è raggiungibile sulla porta 8000.")
+                    st.error(f"Errore: {res.text}")
+            except Exception as e:
+                st.error(f"Errore durante l'elaborazione: {str(e)}")
+else:
+    st.warning(
+        "⚠️ Completa il punto precedente e clicca su 'Invia e Mantieni in Memoria sul Server' per sbloccare l'analisi."
+    )
