@@ -1,48 +1,188 @@
 import streamlit as st
 import requests
 import pandas as pd
+import json
 
-st.set_page_config(page_title="TLSAssistant Dependency Analyzer", layout="wide")
-st.title("Analizzatore Dipendenze TLSAssistant")
-st.markdown("Carica il file strutturato `dependency.json` per mappare le componenti installate ed eseguire audit di sicurezza.")
+st.set_page_config(
+    page_title="TLSAssistant SBOM Analyzer",
+    layout="wide"
+)
 
-BACKEND_URL = "http://127.0.0.1:8000/analyze"
+st.title("TLSAssistant - SBOM & Dependency Analyzer")
 
-uploaded_file = st.file_uploader("Trascina qui il tuo file dependency.json", type=["json"])
+BACKEND_URL = "http://127.0.0.1:8000"
 
-if uploaded_file is not None:
-    if st.button("Avvia Estrazione e Scansione"):
-        with st.spinner("Il Backend sta elaborando il file..."):
-            
-            files = {"file": (uploaded_file.name, uploaded_file.getvalue(), "application/json")}
-            
-            try:
-                response = requests.post(BACKEND_URL, files=files)
-                
-                if response.status_code == 200:
-                    result = response.json()
-                    st.success(f"Analisi completata con successo! Rilevate {result.get('count')} entità.")
-                    
-                    # Tabella Riassuntiva Web
-                    st.subheader("Tabella Componenti Rilevati")
-                    deps_data = result.get("dependencies", [])
-                    if deps_data:
-                        df = pd.DataFrame(deps_data)
-                        # Riordiniamo e rinominiamo le colonne per massima chiarezza nella tesi
-                        df = df[["type", "name", "version", "purl", "language", "github_repo"]]
-                        df.columns = ["Tipo Installazione", "Nome / Risorsa", "Versione", "PURL Generato", "Linguaggio/Ambiente", "Repository GitHub"]
-                        st.dataframe(df, use_container_width=True)
-                    
-                    # Elenco Repository GitHub Trovate
-                    st.subheader("Repository GitHub Identificate (Sorgenti Esterne)")
-                    git_repos = result.get("detected_git_repos", [])
-                    if git_repos:
-                        for repo in git_repos:
-                            st.markdown(f"- [{repo}]({repo})")
-                    else:
-                        st.info("Nessuna repository GitHub esplicita trovata.")
-                    
+# ============================================================
+# MODE
+# ============================================================
+
+mode = st.radio(
+    "Modalità input",
+    ["Upload dependency.json", "GitHub Repository"]
+)
+
+uploaded_file = None
+repo_url = None
+branch = "main"
+
+if mode == "Upload dependency.json":
+
+    uploaded_file = st.file_uploader(
+        "Carica dependency.json",
+        type=["json"]
+    )
+
+else:
+
+    repo_url = st.text_input(
+        "GitHub Repository URL"
+    )
+
+    branch = st.text_input(
+        "Branch",
+        value="main"
+    )
+
+# ============================================================
+# RUN
+# ============================================================
+
+if st.button("Avvia Analisi"):
+
+    with st.spinner("Analisi in corso..."):
+
+        try:
+
+            # =========================
+            # FILE MODE
+            # =========================
+            if uploaded_file is not None:
+
+                response = requests.post(
+                    BACKEND_URL + "/analyze",
+                    files={
+                        "file": (
+                            uploaded_file.name,
+                            uploaded_file.getvalue(),
+                            "application/json"
+                        )
+                    }
+                )
+
+            # =========================
+            # REPO MODE
+            # =========================
+            elif repo_url:
+
+                response = requests.post(
+                    BACKEND_URL + "/analyze-repo",
+                    params={
+                        "repo_url": repo_url,
+                        "branch": branch
+                    }
+                )
+
+            else:
+                st.error("Input non valido")
+                st.stop()
+
+            if response.status_code != 200:
+                st.error(response.text)
+                st.stop()
+
+            result = response.json()
+
+            st.success("Analisi completata")
+
+            # ====================================================
+            # UNIFIED DATA MODEL
+            # ====================================================
+
+            dependencies = result.get("dependencies", [])
+            git_repos = result.get("detected_git_repos", [])
+
+            # ====================================================
+            # TABS (SEMPRE UGUALI)
+            # ====================================================
+
+            tab1, tab2, tab3 = st.tabs([
+                "📦 Componenti" + f" ({len(dependencies)})",
+                "🐳 GitHub Repos",
+                "📊 SBOM Export"
+            ])
+
+            # ====================================================
+            # TAB 1 - COMPONENTI
+            # ====================================================
+
+            with tab1:
+
+                if dependencies:
+
+                    df = pd.DataFrame(dependencies)
+
+                    cols = [
+                        "type",
+                        "component_type",
+                        "name",
+                        "version",
+                        "purl",
+                        "language",
+                        "github_repo"
+                    ]
+
+                    df = df[cols]
+
+                    df.columns = [
+                        "Tipo Installazione",
+                        "Tipo Componente",
+                        "Nome / Risorsa",
+                        "Versione",
+                        "PURL",
+                        "Linguaggio",
+                        "Repo GitHub"
+                    ]
+
+                    st.dataframe(df, use_container_width=True)
+
+                    st.download_button(
+                        "⬇️ Scarica JSON componenti",
+                        json.dumps(dependencies, indent=2),
+                        "components.json",
+                        "application/json"
+                    )
+
                 else:
-                    st.error(f"Errore restituito dal Backend: {response.json().get('detail')}")
-            except requests.exceptions.ConnectionError:
-                st.error("Connessione fallita. Assicurati che 'backend.py' sia attivo nel terminale sulla porta 8000.")
+                    st.info("Nessun componente trovato")
+
+            # ====================================================
+            # TAB 2 - REPOS
+            # ====================================================
+
+            with tab2:
+
+                if git_repos:
+
+                    for r in git_repos:
+                        st.markdown(f"- 🔗 {r}")
+
+                else:
+                    st.info("Nessuna repository GitHub trovata")
+
+            # ====================================================
+            # TAB 3 - EXPORT
+            # ====================================================
+
+            with tab3:
+
+                st.code(json.dumps(result, indent=2), language="json")
+
+                st.download_button(
+                    "⬇️ Scarica SBOM completo",
+                    json.dumps(result, indent=2),
+                    "sbom.json",
+                    "application/json"
+                )
+
+        except requests.exceptions.ConnectionError:
+            st.error("Backend non raggiungibile")
