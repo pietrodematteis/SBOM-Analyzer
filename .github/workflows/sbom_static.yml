@@ -74,11 +74,6 @@ jobs:
           syft file:$DIR_PATH/poetry.lock -o json=${{ env.OUTPUT_DIR }}/syft_poetry.json
           trivy fs --format cyclonedx --output ${{ env.OUTPUT_DIR }}/trivy_poetry.json $DIR_PATH/poetry.lock
           
-          # Esecuzione confronto Poetry
-          if [ -f mio_progetto/confronto_poetry.py ]; then
-            cp mio_progetto/confronto_poetry.py .
-            python confronto_poetry.py
-          fi
         else
           echo "Skipping Poetry: pyproject.toml non trovato."
         fi
@@ -96,11 +91,6 @@ jobs:
           syft file:$REQ_PATH -o json=${{ env.OUTPUT_DIR }}/syft_requirements.json
           trivy fs --format cyclonedx --output ${{ env.OUTPUT_DIR }}/trivy_requirements.json $REQ_PATH
           
-          # Esecuzione tuo eventuale script di confronto requirements
-          if [ -f mio_progetto/confronto_requirements.py ]; then
-            cp mio_progetto/confronto_requirements.py .
-            python confronto_requirements.py
-          fi
         else
           echo "Skipping Requirements: requirements.txt non trovato."
         fi
