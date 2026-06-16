@@ -62,13 +62,18 @@ jobs:
         run: |
           git clone ${{ matrix.repo_url }} target_repo
 
-      - name: Run Trivy SBOM on Dependency
-        uses: aquasecurity/trivy-action@master
+      - name: Run Trivy SBOM on Dependency (All Ecosystems)
+        uses: aquasecurity/trivy-action@0.28.0
         with:
           scan-type: 'fs'
           scan-ref: 'target_repo'
           format: 'cyclonedx'
           output: '${{ steps.repo-info.outputs.clean_name }}-sbom.json'
+          # Forza Trivy a fare la scansione di TUTTI i file di dipendenze (lockfile, manifest, ecc.)
+          scanners: 'license,vuln' 
+          vuln-type: 'library' # Evita scansioni OS inutili, si concentra su Poetry, Pip, NPM, ecc.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload Single SBOM Artifact
         uses: actions/upload-artifact@v4
