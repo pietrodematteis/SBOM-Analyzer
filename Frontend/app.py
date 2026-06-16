@@ -4,7 +4,7 @@ import pandas as pd
 import json
 
 st.set_page_config(page_title="TLSAssistant Flow", layout="wide")
-st.title("🛡️ TLSAssistant - SBOM Analyzer")
+st.title("SBOM Analyzer")
 
 BACKEND_URL = "http://127.0.0.1:8000"
 
