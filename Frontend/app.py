@@ -114,6 +114,8 @@ if st.session_state.sbom_ready:
                         if item.get("url") and "github.com" in item["url"]
                     ]
                     comparison_report = result.get("comparison_matrix", None)
+                    raw_requirements = result.get("raw_requirements", None)
+                    raw_poetry = result.get("raw_poetry", None)
 
                     st.subheader("📊 Risultati dell'Analisi")
 
@@ -121,13 +123,25 @@ if st.session_state.sbom_ready:
                         f"📦 Componenti Rilevati ({len(dependencies)})",
                         "🔗 Link GitHub Sorgenti",
                     ]
+                    
+                    
+
                     if comparison_report:
-                        tab_labels.append("🔍 Matrice di Confronto (Pipeline)")
-                    tab_labels.append("📄 JSON Grezzo Export")
-
+                        tab_labels.append("🔍 Confronto")
+                        
+                    if raw_requirements:
+                        tab_labels.append("📄 SBOM Requirements")
+                    if raw_poetry:
+                        tab_labels.append("📄 SBOM Poetry")
+                        
+                    tab_labels.append("📄 JSON dipendenze dinamiche")
+                    
+                    
                     tabs = st.tabs(tab_labels)
+                    current_tab_idx = 0
 
-                    with tabs[0]:
+                    # Tab 0: Tabella Componenti
+                    with tabs[current_tab_idx]:
                         if dependencies:
                             df = pd.DataFrame(dependencies)
                             cols_desiderate = ["type", "name", "url", "present_in_requirements", "present_in_poetry"]
@@ -140,22 +154,53 @@ if st.session_state.sbom_ready:
                             st.dataframe(df, use_container_width=True)
                         else:
                             st.info("Nessuna lista componenti strutturata disponibile.")
-
-                    with tabs[1]:
+                    
+                    # Tab 1: Link GitHub
+                    current_tab_idx += 1
+                    with tabs[current_tab_idx]:
                         if git_repos:
                             for r in sorted(list(set(git_repos))):
                                 st.markdown(f"- [{r}]({r})" if r.startswith("http") else f"- {r}")
                         else:
                             st.info("Nessuna repository GitHub mappata come dipendenza diretta.")
 
+                    # Tab Matrice di Confronto (se presente)
                     if comparison_report:
-                        with tabs[2]:
+                        current_tab_idx += 1
+                        with tabs[current_tab_idx]:
                             if result.get("github_run_url"):
                                 st.markdown(f"🌐 [Link alla Run di GitHub Actions]({result.get('github_run_url')})")
-                            st.text_area("Log di Confronto:", value=comparison_report, height=400)
+                            st.text_area("Log di Confronto:", value=comparison_report, height=300)
 
-                    # Ultimo Tab (JSON)
-                    with tabs[-1]:
+                    # --- LOGICA DI VISUALIZZAZIONE E SCARICAMENTO DEI NUOVI TAB ---
+                    if raw_requirements:
+                        current_tab_idx += 1
+                        with tabs[current_tab_idx]:
+                            st.markdown("### File `trivy_requirements.json` generato")
+                            st.download_button(
+                                "⬇️ Scarica trivy_requirements.json",
+                                data=raw_requirements,
+                                file_name="trivy_requirements.json",
+                                mime="application/json"
+                            )
+                            st.code(raw_requirements, language="json")
+
+                    if raw_poetry:
+                        current_tab_idx += 1
+                        with tabs[current_tab_idx]:
+                            st.markdown("### File `trivy_poetry.json` generato")
+                            st.download_button(
+                                "⬇️ Scarica trivy_poetry.json",
+                                data=raw_poetry,
+                                file_name="trivy_poetry.json",
+                                mime="application/json"
+                            )
+                            st.code(raw_poetry, language="json")
+                    # -------------------------------------------------------------
+
+                    # Ultimo Tab: JSON Grezzo di tutto il backend
+                    current_tab_idx += 1
+                    with tabs[current_tab_idx]:
                         st.code(json.dumps(result, indent=2), language="json")
                 else:
                     st.error(f"Errore dal server FastAPI: {res.text}")

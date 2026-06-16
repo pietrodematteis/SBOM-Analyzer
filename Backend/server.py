@@ -344,6 +344,19 @@ def compare_dependencies(repo_url: str, branch: str, path_dipendenze: str, forma
                 "present_in_requirements": is_in_req,
                 "present_in_poetry": is_in_poetry
             })
+        
+        def read_raw_file(file_name):
+            file_path = os.path.join(STORAGE_DIR, file_name)
+            if os.path.exists(file_path):
+                try:
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        return f.read()  # Restituisce la stringa JSON così com'è
+                except Exception:
+                    return None
+            return None
+
+        raw_requirements = read_raw_file("trivy_requirements.json")
+        raw_poetry = read_raw_file("trivy_poetry.json")
 
         simulated_matrix = (
             f"=== REPORT REALE PIPELINE ACTIONS ===\n"
@@ -360,7 +373,9 @@ def compare_dependencies(repo_url: str, branch: str, path_dipendenze: str, forma
             "result": extracted_data,
             "detected_git_repos": list(set(repos)),
             "github_run_url": github_run_url,
-            "comparison_matrix": simulated_matrix
+            "comparison_matrix": simulated_matrix,
+            "raw_requirements": raw_requirements,
+            "raw_poetry": raw_poetry
         }
 
     except Exception as e:
