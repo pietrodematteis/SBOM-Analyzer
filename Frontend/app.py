@@ -8,16 +8,24 @@ st.title("🛡️ TLSAssistant - SBOM Analyzer")
 
 BACKEND_URL = "http://127.0.0.1:8000"
 
-# Stato di Streamlit per ricordarsi se la Fase 1 è completata
+# Inizializzazione Stati Permanenti di Streamlit
 if "sbom_ready" not in st.session_state:
     st.session_state.sbom_ready = False
+if "saved_repo" not in st.session_state:
+    st.session_state.saved_repo = ""
+if "saved_branch" not in st.session_state:
+    st.session_state.saved_branch = "main"
+if "saved_format" not in st.session_state:
+    st.session_state.saved_format = "entrambi"
 
 # ============================================================
-# STEP 1 & 2: REPO E ACQUISIZIONE SBOM (SALVATAGGIO SERVER)
+# STEP 1 & 2: REPO E ACQUISIZIONE SBOM
 # ============================================================
 st.subheader("1. Configurazione Target & SBOM di Base")
-repo_url = st.text_input("GitHub Repository URL", placeholder="https://github.com/owner/repo")
-branch = st.text_input("Branch", value="main")
+
+# Usiamo lo stato per non perdere i dati al click dei bottoni
+repo_url = st.text_input("GitHub Repository URL", value=st.session_state.saved_repo, placeholder="https://github.com/owner/repo")
+branch = st.text_input("Branch", value=st.session_state.saved_branch)
 
 sbom_choice = st.radio(
     "Scegli l'origine dello SBOM di base:",
@@ -27,7 +35,6 @@ sbom_choice = st.radio(
 
 requirements_file = None
 poetry_file = None
-format_file = "entrambi" # Default value
 
 if sbom_choice == "Carica file SBOM esistenti":
     col1, col2 = st.columns(2)
@@ -41,13 +48,17 @@ elif sbom_choice == "Genera SBOM Statico da zero":
         options=["entrambi", "requirements", "poetry"],
         format_func=lambda x: x.capitalize()
     )
-    format_file = format_type
+    st.session_state.saved_format = format_type
 
 if st.button("🔄 Invia e Mantieni in Memoria sul Server"):
     if not repo_url:
         st.error("Inserisci la URL della repo.")
         st.stop()
         
+    # Salva nello stato per i passaggi successivi
+    st.session_state.saved_repo = repo_url
+    st.session_state.saved_branch = branch
+
     with st.spinner("Salvataggio file sul server..."):
         try:
             if sbom_choice == "Genera SBOM Statico da zero":
@@ -56,11 +67,12 @@ if st.button("🔄 Invia e Mantieni in Memoria sul Server"):
                 files = {}
                 if requirements_file: files["requirements_file"] = requirements_file.getvalue()
                 if poetry_file: files["poetry_file"] = poetry_file.getvalue()
-                res = requests.post(f"{BACKEND_URL}/upload-sbom", data={"action": "upload", "format": format_file}, files=files)
+                res = requests.post(f"{BACKEND_URL}/upload-sbom", data={"action": "upload"}, files=files)
                 
             if res.status_code == 200:
                 st.session_state.sbom_ready = True
                 st.success(res.json().get("message"))
+                st.rerun() # Forza il rinfresco immediato per mostrare lo Step 2
             else:
                 st.error(f"Errore server: {res.text}")
         except Exception as e:
@@ -80,14 +92,16 @@ if st.session_state.sbom_ready:
     ).strip()
     
     if st.button("📊 Genera Tabella di Confronto Finale"):
-        with st.spinner("Clonazione repo e calcolo matrice in corso..."):
+        with st.spinner("Innesco pipeline e calcolo matrice in corso (Attendi i log a terminale)..."):
             try:
+                # Chiamata POST al Backend con tutti i parametri necessari
                 res = requests.post(
                     f"{BACKEND_URL}/compare-dependencies",
                     params={
-                        "repo_url": repo_url,
-                        "branch": branch,
+                        "repo_url": st.session_state.saved_repo,
+                        "branch": st.session_state.saved_branch,
                         "path_dipendenze": path_dipendenze,
+                        "format": st.session_state.saved_format,
                     },
                 )
 
@@ -116,85 +130,36 @@ if st.session_state.sbom_ready:
                     with tabs[0]:
                         if dependencies:
                             df = pd.DataFrame(dependencies)
-                            cols_desiderate = [
-                                "type",
-                                "name",
-                                "url",
-                                "present_in_requirements",
-                                "present_in_poetry",
-                            ]
-                            available_cols = [
-                                c for c in cols_desiderate if c in df.columns
-                            ]
+                            cols_desiderate = ["type", "name", "url", "present_in_requirements", "present_in_poetry"]
+                            available_cols = [c for c in cols_desiderate if c in df.columns]
                             df = df[available_cols]
-
-                            df = df.rename(
-                                columns={
-                                    "type": "Tipo",
-                                    "name": "Componente",
-                                    "url": "Sorgente / PURL",
-                                    "present_in_requirements": "Presente in Requirements",
-                                    "present_in_poetry": "Presente in Poetry",
-                                }
-                            )
-
+                            df = df.rename(columns={
+                                "type": "Tipo", "name": "Componente", "url": "Sorgente / PURL",
+                                "present_in_requirements": "Presente in Requirements", "present_in_poetry": "Presente in Poetry"
+                            })
                             st.dataframe(df, use_container_width=True)
-                            st.download_button(
-                                "⬇️ Scarica Elenco Componenti (JSON)",
-                                json.dumps(dependencies, indent=2),
-                                "dependencies_extracted.json",
-                                "application/json",
-                            )
                         else:
-                            st.info(
-                                "Nessuna lista componenti strutturata disponibile."
-                            )
+                            st.info("Nessuna lista componenti strutturata disponibile.")
 
                     with tabs[1]:
                         if git_repos:
-                            st.markdown(
-                                "### Repository esterne associate alle dipendenze:"
-                            )
                             for r in sorted(list(set(git_repos))):
-                                if r.startswith("http"):
-                                    st.markdown(f"- [{r}]({r})")
-                                else:
-                                    st.markdown(f"- {r}")
+                                st.markdown(f"- [{r}]({r})" if r.startswith("http") else f"- {r}")
                         else:
-                            st.info(
-                                "Nessuna repository GitHub mappata come dipendenza diretta."
-                            )
+                            st.info("Nessuna repository GitHub mappata come dipendenza diretta.")
 
-                    current_tab_idx = 2
                     if comparison_report:
                         with tabs[2]:
-                            st.markdown(
-                                "### Output di Divergenza Generato dagli Script"
-                            )
                             if result.get("github_run_url"):
-                                st.markdown(
-                                    f"🌐 [Link alla Run di GitHub Actions]({result.get('github_run_url')})"
-                                )
-                            st.text_area(
-                                "Log di Confronto:",
-                                value=comparison_report,
-                                height=400,
-                            )
-                        current_tab_idx = 3
+                                st.markdown(f"🌐 [Link alla Run di GitHub Actions]({result.get('github_run_url')})")
+                            st.text_area("Log di Confronto:", value=comparison_report, height=400)
 
-                    with tabs[current_tab_idx]:
+                    # Ultimo Tab (JSON)
+                    with tabs[-1]:
                         st.code(json.dumps(result, indent=2), language="json")
-                        st.download_button(
-                            "⬇️ Scarica Output SBOM Finale",
-                            json.dumps(result, indent=2),
-                            "sbom_full_output.json",
-                            "application/json",
-                        )
                 else:
-                    st.error(f"Errore: {res.text}")
+                    st.error(f"Errore dal server FastAPI: {res.text}")
             except Exception as e:
                 st.error(f"Errore durante l'elaborazione: {str(e)}")
 else:
-    st.warning(
-        "⚠️ Completa il punto precedente e clicca su 'Invia e Mantieni in Memoria sul Server' per sbloccare l'analisi."
-    )
+    st.warning("⚠️ Completa il punto precedente e clicca su 'Invia e Mantieni in Memoria sul Server' per sbloccare l'analisi.")

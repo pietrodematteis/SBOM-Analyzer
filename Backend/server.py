@@ -123,7 +123,7 @@ def wait_and_download_artifacts(run_id: int, dest_dir: str):
     headers = github_headers()
     url_run = f"{GITHUB_API}/{MY_GITHUB_OWNER}/{MY_GITHUB_REPO}/actions/runs/{run_id}"
     
-    # 1. Polling sullo stato della run (Timeout massimo 10 minuti)
+    # Polling sullo stato della run (Timeout massimo 10 minuti)
     for _ in range(120):  
         print(f"Controllo stato run ID {run_id}...")
         res = requests.get(url_run, headers=headers)
@@ -150,7 +150,7 @@ def wait_and_download_artifacts(run_id: int, dest_dir: str):
     if not target_artifact:
         return
 
-    # 3. Download del pacchetto ZIP dell'artifact
+    # Download del pacchetto ZIP dell'artifact
     download_url = target_artifact["archive_download_url"]
     res_dl = requests.get(download_url, headers=headers, stream=True)
     if res_dl.status_code == 200:
@@ -164,14 +164,16 @@ def wait_and_download_artifacts(run_id: int, dest_dir: str):
 
 def trigger_github_action(repo_url: str, branch: str, format_type: str) -> Optional[dict]:
     """Innesca la pipeline remota e restituisce dizionario con URL e Run ID."""
+    print("[DEBUG 1] Entrato in trigger_github_action", flush=True)
     headers = github_headers()
     if not headers:
+        print("[DEBUG X] ERRORE: GITHUB_TOKEN non trovato o vuoto nelle variabili d'ambiente!", flush=True)
         return None
 
     match = re.search(r"github\.com/([^/]+)/([^/?#]+)", repo_url)
     owner_repo = f"{match.group(1)}/{match.group(2).replace('.git', '')}" if match else repo_url
 
-    url_dispatch = f"{GITHUB_API}/{MY_GITHUB_OWNER}/{MY_GITHUB_REPO}/actions/workflows/main.yml/dispatches"
+    url_dispatch = f"{GITHUB_API}/{MY_GITHUB_OWNER}/{MY_GITHUB_REPO}/actions/workflows/sbom_static.yml/dispatches"
     payload = {
         "ref": "main",
         "inputs": {
@@ -181,24 +183,37 @@ def trigger_github_action(repo_url: str, branch: str, format_type: str) -> Optio
         }
     }
 
-    res = requests.post(url_dispatch, headers=headers, json=payload)
-    if res.status_code != 204:
+    print(f"[DEBUG 2] Invio POST a workflow dispatch... URL: {url_dispatch}", flush=True)
+    try:
+        res = requests.post(url_dispatch, headers=headers, json=payload, timeout=10)
+        print(f"[DEBUG 3] Risposta POST dispatch: Stato {res.status_code}", flush=True)
+        if res.status_code != 204:
+            print(f"[DEBUG X] Errore da GitHub Dispatch: {res.text}", flush=True)
+            return None
+    except Exception as err:
+        print(f"[DEBUG X] Eccezione durante la POST di dispatch: {err}", flush=True)
         return None
 
+    print("[DEBUG 4] Attesa di 6 secondi per la registrazione della run...", flush=True)
     time.sleep(6)
     
     url_runs = f"{GITHUB_API}/{MY_GITHUB_OWNER}/{MY_GITHUB_REPO}/actions/runs?per_page=1"
-    res_runs = requests.get(url_runs, headers=headers)
-    if res_runs.status_code == 200:
-        runs = res_runs.json().get("workflow_runs", [])
-        if runs:
-            return {
-                "html_url": runs[0].get("html_url"),
-                "id": runs[0].get("id")
-            }
+    print(f"[DEBUG 5] Recupero l'ultima run dall'URL: {url_runs}", flush=True)
+    try:
+        res_runs = requests.get(url_runs, headers=headers, timeout=10)
+        if res_runs.status_code == 200:
+            runs = res_runs.json().get("workflow_runs", [])
+            if runs:
+                print(f"[DEBUG 6] Trovata run ID: {runs[0].get('id')}", flush=True)
+                return {
+                    "html_url": runs[0].get("html_url"),
+                    "id": runs[0].get("id")
+                }
+            print("[DEBUG X] Nessuna run trovata nella lista dei workflow_runs.", flush=True)
+    except Exception as err:
+        print(f"[DEBUG X] Eccezione durante la GET delle runs: {err}", flush=True)
             
     return None
-
 
 # ============================================================
 # ACQUISIZIONE E SALVATAGGIO IN MEMORIA SERVER
@@ -242,14 +257,15 @@ def compare_dependencies(repo_url: str, branch: str, path_dipendenze: str, forma
     try:
         github_run_url = None
         
-        # 1. Attivazione ed esecuzione del Polling se configurato per generare
+        print("[BACKEND] Avvio trigger_github_action...", flush=True)
+        # Attivazione ed esecuzione del Polling se configurato per generare
         action_info = trigger_github_action(repo_url, branch, format)
+        print(f"DEBUG: Risultato trigger_github_action -> {action_info}", flush=True)
         if action_info:
             github_run_url = action_info["html_url"]
-            # Questo blocco avvia il ciclo for che vedi sopra con i tuoi "print"
             wait_and_download_artifacts(action_info["id"], STORAGE_DIR)
 
-        # 2. Clonazione locale per estrarre il file di controllo dinamico
+        # Clonazione locale per estrarre il file di controllo dinamico
         subprocess.run([
             "git", "clone", "--depth", "1", "--branch", branch, repo_url, tmp_clone
         ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -348,6 +364,7 @@ def compare_dependencies(repo_url: str, branch: str, path_dipendenze: str, forma
         }
 
     except Exception as e:
+        print(f"[CRITICAL ERROR] Qualcosa è fallito catastroficamente: {str(e)}", flush=True)
         raise HTTPException(500, f"Errore interno del server: {str(e)}")
     finally:
         shutil.rmtree(tmp_clone, ignore_errors=True)
