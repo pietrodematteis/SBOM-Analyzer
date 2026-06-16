@@ -85,16 +85,20 @@ st.markdown("---")
 # ============================================================
 if st.session_state.sbom_ready:
     st.subheader("2. Analisi Comparativa Dinamica")
-    
+
     path_dipendenze = st.text_input(
         "Nome del file delle dipendenze dinamiche nella repo:",
         value="dependencies.json"
     ).strip()
-    
+
+    # Inizializziamo lo stato per i risultati dell'analisi se non esiste
+    if "analysis_results" not in st.session_state:
+        st.session_state.analysis_results = None
+
+    # Se l'utente clicca il bottone, facciamo la chiamata e salviamo i dati nello stato
     if st.button("📊 Genera Tabella di Confronto Finale"):
-        with st.spinner("Innesco pipeline e calcolo matrice in corso (Attendi i log a terminale)..."):
+        with st.spinner("Innesco pipeline e calcolo matrice in corso..."):
             try:
-                # Chiamata POST al Backend con tutti i parametri necessari
                 res = requests.post(
                     f"{BACKEND_URL}/compare-dependencies",
                     params={
@@ -106,105 +110,163 @@ if st.session_state.sbom_ready:
                 )
 
                 if res.status_code == 200:
-                    result = res.json()
-                    dependencies = result.get("result", [])
-                    git_repos = [
-                        item["url"]
-                        for item in dependencies
-                        if item.get("url") and "github.com" in item["url"]
-                    ]
-                    comparison_report = result.get("comparison_matrix", None)
-                    raw_requirements = result.get("raw_requirements", None)
-                    raw_poetry = result.get("raw_poetry", None)
-
-                    st.subheader("📊 Risultati dell'Analisi")
-
-                    tab_labels = [
-                        f"📦 Componenti Rilevati ({len(dependencies)})",
-                        "🔗 Link GitHub Sorgenti",
-                    ]
-                    
-                    
-
-                    if comparison_report:
-                        tab_labels.append("🔍 Confronto")
-                        
-                    if raw_requirements:
-                        tab_labels.append("📄 SBOM Requirements")
-                    if raw_poetry:
-                        tab_labels.append("📄 SBOM Poetry")
-                        
-                    tab_labels.append("📄 JSON dipendenze dinamiche")
-                    
-                    
-                    tabs = st.tabs(tab_labels)
-                    current_tab_idx = 0
-
-                    # Tab 0: Tabella Componenti
-                    with tabs[current_tab_idx]:
-                        if dependencies:
-                            df = pd.DataFrame(dependencies)
-                            cols_desiderate = ["type", "name", "url", "present_in_requirements", "present_in_poetry"]
-                            available_cols = [c for c in cols_desiderate if c in df.columns]
-                            df = df[available_cols]
-                            df = df.rename(columns={
-                                "type": "Tipo", "name": "Componente", "url": "Sorgente / PURL",
-                                "present_in_requirements": "Presente in Requirements", "present_in_poetry": "Presente in Poetry"
-                            })
-                            st.dataframe(df, use_container_width=True)
-                        else:
-                            st.info("Nessuna lista componenti strutturata disponibile.")
-                    
-                    # Tab 1: Link GitHub
-                    current_tab_idx += 1
-                    with tabs[current_tab_idx]:
-                        if git_repos:
-                            for r in sorted(list(set(git_repos))):
-                                st.markdown(f"- [{r}]({r})" if r.startswith("http") else f"- {r}")
-                        else:
-                            st.info("Nessuna repository GitHub mappata come dipendenza diretta.")
-
-                    # Tab Matrice di Confronto (se presente)
-                    if comparison_report:
-                        current_tab_idx += 1
-                        with tabs[current_tab_idx]:
-                            if result.get("github_run_url"):
-                                st.markdown(f"🌐 [Link alla Run di GitHub Actions]({result.get('github_run_url')})")
-                            st.text_area("Log di Confronto:", value=comparison_report, height=300)
-
-                    # --- LOGICA DI VISUALIZZAZIONE E SCARICAMENTO DEI NUOVI TAB ---
-                    if raw_requirements:
-                        current_tab_idx += 1
-                        with tabs[current_tab_idx]:
-                            st.markdown("### File `trivy_requirements.json` generato")
-                            st.download_button(
-                                "⬇️ Scarica trivy_requirements.json",
-                                data=raw_requirements,
-                                file_name="trivy_requirements.json",
-                                mime="application/json"
-                            )
-                            st.code(raw_requirements, language="json")
-
-                    if raw_poetry:
-                        current_tab_idx += 1
-                        with tabs[current_tab_idx]:
-                            st.markdown("### File `trivy_poetry.json` generato")
-                            st.download_button(
-                                "⬇️ Scarica trivy_poetry.json",
-                                data=raw_poetry,
-                                file_name="trivy_poetry.json",
-                                mime="application/json"
-                            )
-                            st.code(raw_poetry, language="json")
-                    # -------------------------------------------------------------
-
-                    # Ultimo Tab: JSON Grezzo di tutto il backend
-                    current_tab_idx += 1
-                    with tabs[current_tab_idx]:
-                        st.code(json.dumps(result, indent=2), language="json")
+                    # SALVIAMO IL RISULTATO NELLO STATO PERMANENTE
+                    st.session_state.analysis_results = res.json()
                 else:
                     st.error(f"Errore dal server FastAPI: {res.text}")
+                    st.session_state.analysis_results = None
             except Exception as e:
                 st.error(f"Errore durante l'elaborazione: {str(e)}")
+                st.session_state.analysis_results = None
+
+    # SE ABBIAMO DEI RISULTATI SALVATI, MOSTRIAMO LA DASHBOARD
+    if st.session_state.analysis_results is not None:
+        result = st.session_state.analysis_results
+        dependencies = result.get("result", [])
+        git_repos = [
+            item["url"]
+            for item in dependencies
+            if item.get("url") and "github.com" in item["url"]
+        ]
+        comparison_report = result.get("comparison_matrix", None)
+        raw_req = result.get("raw_requirements", None)
+        raw_poe = result.get("raw_poetry", None)
+
+        st.subheader("📊 Risultati dell'Analisi")
+
+        # Configurazione Tab dinamici
+        tab_labels = [f"📦 Componenti Rilevati ({len(dependencies)})", "🔗 Link GitHub Sorgenti"]
+        if comparison_report:
+            tab_labels.append("🔍 Matrice di Confronto (Pipeline)")
+        if raw_req:
+            tab_labels.append("📋 Trivy Requirements JSON")
+        if raw_poe:
+            tab_labels.append("📋 Trivy Poetry JSON")
+        tab_labels.append("📄 JSON Grezzo Backend")
+
+        tabs = st.tabs(tab_labels)
+        current_tab_idx = 0
+
+        # Tab 0: Tabella Componenti
+       # Tab 0: Tabella Componenti con bottoni di download riga per riga
+        with tabs[0]:
+            if dependencies:
+                # Creiamo l'intestazione della tabella con le colonne ben spaziate
+                # [Tipo, Componente, Sorgente, Presente in Req, Presente in Poe, Azione]
+                col_tipo, col_comp, col_sorg, col_req, col_poe, col_az = st.columns([1, 2, 3, 1.5, 1.5, 1.5])
+                
+                with col_tipo: st.markdown("**Tipo**")
+                with col_comp: st.markdown("**Componente**")
+                with col_sorg: st.markdown("**Sorgente / PURL**")
+                with col_req:  st.markdown("**In Requirements**")
+                with col_poe:  st.markdown("**In Poetry**")
+                with col_az:   st.markdown("**SBOM**")
+                st.markdown("---") # Riga di separazione per l'header
+
+                # Iteriamo su ogni componente per creare le righe della tabella
+                for idx, item in enumerate(dependencies):
+                    c_tipo = item.get("type", "-")
+                    c_name = item.get("name", "-")
+                    c_url  = item.get("url", "-")
+                    c_req  = item.get("present_in_requirements", "❌")
+                    c_poe  = item.get("present_in_poetry", "❌")
+                    
+                    # Generiamo la riga visiva
+                    r_tipo, r_comp, r_sorg, r_req, r_poe, r_az = st.columns([1, 2, 3, 1.5, 1.5, 1.5])
+                    
+                    with r_tipo: st.write(c_tipo)
+                    with r_comp: st.write(c_name)
+                    with r_sorg: st.write(c_url)
+                    with r_req:  st.write(c_req)
+                    with r_poe:  st.write(c_poe)
+                    
+                    # Logica del Bottone di Download nella colonna Azione
+                    with r_az:
+                        # Costruiamo il nome del file ipotetico generato dalla Deep Inspection (es. "owner-repo-sbom.json")
+                        # Sostituiamo i caratteri speciali per mappare il nome del file ricevuto dal backend
+                        clean_repo_name = c_url.replace("https://github.com/", "").replace("/", "-").replace(".git", "")
+                        expected_filename = f"{clean_repo_name}-sbom.json"
+                        
+                        # Controlliamo se nella sessione dello st.session_state abbiamo i risultati della Deep Inspection
+                        # e se il file specifico di questa dipendenza esiste
+                        deep_results = st.session_state.get("deep_sbom_results", {})
+                        available_sboms = deep_results.get("sboms", {}) if deep_results else {}
+                        
+                        if expected_filename in available_sboms:
+                            # Se lo SBOM è stato generato, mostriamo il pulsante di download attivo
+                            st.download_button(
+                                label="⬇️ SBOM",
+                                data=available_sboms[expected_filename],
+                                file_name=expected_filename,
+                                mime="application/json",
+                                key=f"dl_row_{clean_repo_name}_{idx}", # Chiave univoca essenziale
+                                use_container_width=True
+                            )
+                        else:
+                            # Se l'utente non ha ancora fatto la "Deep Inspection" o il file non c'è, il tasto è disabilitato
+                            st.button(
+                                label="🚫 Non Disp.", 
+                                key=f"disabled_row_{idx}", 
+                                disabled=True,
+                                use_container_width=True
+                            )
+            else:
+                st.info("Nessuna lista componenti strutturata disponibile.")
+        # Tab 1: Link GitHub
+        current_tab_idx += 1
+        with tabs[current_tab_idx]:
+            if git_repos:
+                for r in sorted(list(set(git_repos))):
+                    st.markdown(f"- [{r}]({r})" if r.startswith("http") else f"- {r}")
+            else:
+                st.info("Nessuna repository GitHub mappata come dipendenza diretta.")
+
+        # Tab Matrice di Confronto
+        if comparison_report:
+            current_tab_idx += 1
+            with tabs[current_tab_idx]:
+                if result.get("github_run_url"):
+                    st.markdown(f"🌐 [Link alla Run di GitHub Actions]({result.get('github_run_url')})")
+                st.text_area("Log di Confronto:", value=comparison_report, height=300)
+
+        # Tab Requirements JSON
+        if raw_req:
+            current_tab_idx += 1
+            with tabs[current_tab_idx]:
+                st.markdown("### File `trivy_requirements.json` generato")
+                st.download_button(
+                    "⬇️ Scarica trivy_requirements.json",
+                    data=raw_req,
+                    file_name="trivy_requirements.json",
+                    mime="application/json",
+                    key="btn_dl_req"
+                )
+                st.code(raw_req, language="json")
+
+        # Tab Poetry JSON
+        if raw_poe:
+            current_tab_idx += 1
+            with tabs[current_tab_idx]:
+                st.markdown("### File `trivy_poetry.json` generato")
+                st.download_button(
+                    "⬇️ Scarica trivy_poetry.json",
+                    data=raw_poe,
+                    file_name="trivy_poetry.json",
+                    mime="application/json",
+                    key="btn_dl_poe"
+                )
+                st.code(raw_poe, language="json")
+
+        # Ultimo Tab: JSON Grezzo
+        current_tab_idx += 1
+        with tabs[current_tab_idx]:
+            st.code(json.dumps(result, indent=2), language="json")
+            st.download_button(
+                "⬇️ Scarica JSON Completo Backend",
+                data=json.dumps(result, indent=2),
+                file_name="sbom_full_output.json",
+                mime="application/json",
+                key="btn_dl_full_backend"
+            )
 else:
     st.warning("⚠️ Completa il punto precedente e clicca su 'Invia e Mantieni in Memoria sul Server' per sbloccare l'analisi.")

@@ -1,0 +1,68 @@
+name: Dynamic Dependencies SBOM Analyzer
+
+on:
+  workflow_dispatch:
+    inputs:
+      path_dipendenze:
+        description: 'Path del file delle dipendenze'
+        required: true
+        default: 'dependencies.json'
+
+jobs:
+  # --- JOB 1: ESTRAZIONE MATRICE ---
+  parse-dependencies:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Parse JSON to Matrix
+        id: set-matrix
+        run: |
+          # Legge il file, filtra solo le url di github e crea un array JSON compatto
+          # Esempio output: ["https://github.com/user/repo1", "https://github.com/user/repo2"]
+          DEPENDENCIES=$(jq -c '[.[] | select(.url != null and (.url | contains("github.com"))) | .url]' ${{ github.event.inputs.path_dipendenze }})
+          echo "Trovate le seguenti repo: $DEPENDENCIES"
+          
+          # Passa la matrice al job successivo
+          echo "matrix=$DEPENDENCIES" >> $GITHUB_OUTPUT
+
+  # --- JOB 2: ANALISI IN PARALLELO CON TRIVY ---
+  trivy-analysis:
+    needs: parse-dependencies
+    runs-on: ubuntu-latest
+    # Se il file dependencies.json è vuoto o non ha repo github, salta il job
+    if: ${{ needs.parse-dependencies.outputs.matrix != '[]' && needs.parse-dependencies.outputs.matrix != '' }}
+    strategy:
+      matrix:
+        repo_url: ${{ fromJson(needs.parse-dependencies.outputs.matrix) }}
+      fail-fast: false # Continua ad analizzare le altre repo anche se una fallisce
+    
+    steps:
+      - name: Clean up Repository Name
+        id: repo-info
+        run: |
+          # Estrae il nome pulito della repo per usarlo nei nomi dei file (es. "owner-repo")
+          CLEAN_NAME=$(echo "${{ matrix.repo_url }}" | sed 's|https://github.com/||' | sed 's|/|-|g' | sed 's|.git||')
+          echo "clean_name=$CLEAN_NAME" >> $GITHUB_OUTPUT
+
+      - name: Clone Dependency Repository
+        run: |
+          git clone ${{ matrix.repo_url }} target_repo
+
+      - name: Run Trivy SBOM on Dependency
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: 'target_repo'
+          format: 'cyclonedx'
+          output: '${{ steps.repo-info.outputs.clean_name }}-sbom.json'
+
+      - name: Upload Single SBOM Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ steps.repo-info.outputs.clean_name }}
+          path: '${{ steps.repo-info.outputs.clean_name }}-sbom.json'
+          retention-days: 1
