@@ -219,7 +219,7 @@ async def upload_sbom(
             raise HTTPException(400, "Carica almeno uno dei due file.")
 
         if requirements_file:
-            with open(os.path.join(STORAGE_DIR, "syft_requirements.json"), "wb") as f:
+            with open(os.path.join(STORAGE_DIR, "trivy_requirements.json"), "wb") as f:
                 f.write(await requirements_file.read())
 
         if poetry_file:
@@ -298,7 +298,7 @@ def compare_dependencies(repo_url: str, branch: str, path_dipendenze: str, forma
                 return set()
 
         # Leggiamo i file REALI mappati corretti (estratti dall'artifact o caricati)
-        req_identifiers = extract_identifiers("syft_requirements.json")
+        req_identifiers = extract_identifiers("trivy_requirements.json")
         poetry_identifiers = extract_identifiers("trivy_poetry.json")
 
         extracted_data = []
@@ -332,7 +332,7 @@ def compare_dependencies(repo_url: str, branch: str, path_dipendenze: str, forma
         simulated_matrix = (
             f"=== REPORT REALE PIPELINE ACTIONS ===\n"
             f"Componenti estratti dal file dinamico: {len(extracted_data)}\n"
-            f"Trovati in Syft (Requirements): {len([e for e in extracted_data if e['present_in_requirements'] == '✅'])}\n"
+            f"Trovati in Trivy (Requirements): {len([e for e in extracted_data if e['present_in_requirements'] == '✅'])}\n"
             f"Trovati in Trivy (Poetry): {len([e for e in extracted_data if e['present_in_poetry'] == '✅'])}\n"
         )
 

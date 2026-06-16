@@ -133,8 +133,8 @@ if st.session_state.sbom_ready:
                                     "type": "Tipo",
                                     "name": "Componente",
                                     "url": "Sorgente / PURL",
-                                    "present_in_requirements": "Presente in Requirements (Syft)",
-                                    "present_in_poetry": "Presente in Poetry (Trivy)",
+                                    "present_in_requirements": "Presente in Requirements",
+                                    "present_in_poetry": "Presente in Poetry",
                                 }
                             )
 

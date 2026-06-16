@@ -50,12 +50,11 @@ jobs:
 
     - name: Install tools
       run: |
-        pip install cyclonedx-bom poetry
-        curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+        pip install poetry
         curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sudo sh -s -- -b /usr/local/bin
 
     # ============================================================
-    # ESECUZIONE POETRY
+    # ESECUZIONE POETRY (SOLO TRIVY)
     # ============================================================
     - name: Process Poetry SBOMs
       if: ${{ env.FORMAT_TYPE == 'poetry' || env.FORMAT_TYPE == 'entrambi' }}
@@ -69,9 +68,7 @@ jobs:
           poetry lock
           cd -
           
-          # Generazione SBOM
-          cyclonedx-py poetry --of JSON -o ${{ env.OUTPUT_DIR }}/cyclonedx_poetry.json $DIR_PATH
-          syft file:$DIR_PATH/poetry.lock -o json=${{ env.OUTPUT_DIR }}/syft_poetry.json
+          # Generazione SBOM con Trivy
           trivy fs --format cyclonedx --output ${{ env.OUTPUT_DIR }}/trivy_poetry.json $DIR_PATH/poetry.lock
           
         else
@@ -79,7 +76,7 @@ jobs:
         fi
 
     # ============================================================
-    #  ESECUZIONE REQUIREMENTS
+    #  ESECUZIONE REQUIREMENTS (SOLO TRIVY)
     # ============================================================
     - name: Process Requirements SBOMs
       if: ${{ env.FORMAT_TYPE == 'requirements' || env.FORMAT_TYPE == 'entrambi' }}
@@ -87,8 +84,6 @@ jobs:
         mkdir -p ${{ env.OUTPUT_DIR }}
         REQ_PATH=$(find "$(pwd)/repo_esterna" -name "requirements.txt" | head -n 1)
         if [ -n "$REQ_PATH" ]; then
-          # Generazione SBOM analoghi per requirements
-          syft file:$REQ_PATH -o json=${{ env.OUTPUT_DIR }}/syft_requirements.json
           trivy fs --format cyclonedx --output ${{ env.OUTPUT_DIR }}/trivy_requirements.json $REQ_PATH
           
         else
@@ -104,4 +99,3 @@ jobs:
         name: sbom-static-results
         path: |
           ${{ env.OUTPUT_DIR }}/*.json
-          confronto_result_*.txt
