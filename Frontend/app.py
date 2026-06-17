@@ -263,8 +263,11 @@ if st.session_state.sbom_ready:
                             if "docker_report" in response_data:
                                 if st.session_state.analysis_results:
                                     st.session_state.analysis_results["docker_report"] = response_data["docker_report"]
+                                    st.session_state.analysis_results["raw_docker_sbom"] = response_data.get("raw_docker_sbom", "")
                                 else:
-                                    st.session_state.analysis_results = {"docker_report": response_data["docker_report"]}
+                                    st.session_state.analysis_results = {
+                                        "docker_report": response_data["docker_report"],
+                                        "raw_docker_sbom": response_data.get("raw_docker_sbom", "")}
                             
                             st.session_state.docker_analyzed = True
                             st.success("SBOM Docker generato con successo! Statistiche aggiornate sotto.")
@@ -289,13 +292,36 @@ if st.session_state.sbom_ready:
             kpi2.metric("✅ In Comune con il Codice", docker_report.get("packages_in_common_count", 0))
             kpi3.metric("⚠️ Esclusivi Docker", docker_report.get("packages_only_in_docker_count", 0))
 
-            st.download_button(
-                label="⬇️ Scarica Report Deviazioni Docker (JSON completo)",
-                data=json.dumps(docker_report, indent=2),
-                file_name="docker_cross_reference_report.json",
-                mime="application/json",
-                use_container_width=True
-            )
+            # Estraiamo lo SBOM completo dai risultati salvati
+            raw_docker_sbom = result.get("raw_docker_sbom", "")
+
+            # Creiamo due colonne per i bottoni di download
+            dl_col1, dl_col2 = st.columns(2)
+            
+            with dl_col1:
+                st.download_button(
+                    label="⬇️ Scarica Report degli elementi SOLO nel Docker (JSON deviazioni)",
+                    data=json.dumps(docker_report, indent=2),
+                    file_name="docker_cross_reference_report.json",
+                    mime="application/json",
+                    use_container_width=True
+                )
+            
+            with dl_col2:
+                if raw_docker_sbom:
+                    st.download_button(
+                        label="⬇️ Scarica SBOM Docker Completo",
+                        data=raw_docker_sbom,
+                        file_name="cyclonedx-SBOM.json",
+                        mime="application/json",
+                        use_container_width=True
+                    )
+                else:
+                    st.button(
+                        label="🚫 SBOM Docker originale non disponibile",
+                        disabled=True,
+                        use_container_width=True
+                    )
             
             with st.expander(f"🟢 Pacchetti dell'Immagine Presenti nel Codice ({docker_report.get('packages_in_common_count')})"):
                 if docker_report.get("in_common"):
@@ -324,7 +350,7 @@ if st.session_state.sbom_ready:
         if comparison_report: tab_labels.append("🔍 Matrice di Confronto (Pipeline)")
         if raw_req: tab_labels.append("📋 Trivy Requirements JSON")
         if raw_poe: tab_labels.append("📋 Trivy Poetry JSON")
-        tab_labels.append("📄 JSON Grezzo Backend")
+        tab_labels.append("📄 JSON grezzo analizzato backend")
 
         tabs = st.tabs(tab_labels)
         current_tab_idx = 0

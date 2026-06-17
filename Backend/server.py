@@ -648,11 +648,19 @@ def generate_docker_sbom(docker_target: str, vuln_type: str = "os,library"):
         "only_in_docker": only_in_docker
     }
 
+    # Per il download button del Frontend, restituiamo anche lo SBOM Docker completo in formato testo (raw) così da poterlo scaricare direttamente senza dover rifare una chiamata al backend per leggerlo.
+    raw_docker_sbom = ""
+    try:
+        with open(os.path.join(STORAGE_DIR, "docker_sbom.json"), "r", encoding="utf-8") as f:
+            raw_docker_sbom = f.read()
+    except Exception as e:
+        print(f"[WARNING] Impossibile leggere lo SBOM grezzo: {str(e)}")
     return {
         "status": "success", 
         "github_run_url": docker_action_info["html_url"], 
         "message": "SBOM Docker generato, scaricato e confrontato con successo.",
-        "docker_report": docker_report
+        "docker_report": docker_report,
+        "raw_docker_sbom": raw_docker_sbom
     }
 if __name__ == "__main__":
     import uvicorn
