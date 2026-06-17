@@ -534,8 +534,126 @@ def analyze_dependencies_sbom(repo_url: str, branch: str, path_dipendenze: str =
         "github_run_url": github_run_url,
         "sboms": generated_sboms
     }
+ 
+# ============================================================
+# GENERAZIONE SBOM DOCKER REMOTA
+# ============================================================
+   
 
+@app.post("/generate-docker-sbom")
+def generate_docker_sbom(docker_target: str, vuln_type: str = "os,library"):
 
+    print(f"[BACKEND] Avvio pipeline Docker per l'immagine: {docker_target}", flush=True)
+    
+    # Allineamento Input con la tua GitHub Action (image_repository)
+    docker_inputs = {
+        "image_repository": docker_target,
+        "src_vuln_type": vuln_type
+    }
+    
+    docker_action_info = trigger_github_action("sbom_dockerfile.yml", docker_inputs) 
+    if not docker_action_info:
+        raise HTTPException(500, "Impossibile avviare la pipeline Docker remota.")
+        
+    # Attesa completamento e download dello ZIP (estratto in STORAGE_DIR)
+    success = wait_and_download_artifacts(docker_action_info["id"], STORAGE_DIR)
+    if not success:
+        raise HTTPException(500, "Pipeline completata ma nessun artifact trovato.")
+
+    # Individuazione del file SBOM base generato da Trivy (cyclonedx-SBOM.json)
+    base_sbom_name = "cyclonedx-SBOM.json"
+    target_path = os.path.join(STORAGE_DIR, base_sbom_name)
+    
+    if not os.path.exists(target_path):
+        # Fallback nel caso in cui i file siano dentro una sottocartella dello zip
+        found = False
+        for root, _, files in os.walk(STORAGE_DIR):
+            if base_sbom_name in files:
+                shutil.move(os.path.join(root, base_sbom_name), target_path)
+                found = True
+                break
+        if not found:
+            raise HTTPException(500, f"Artifact scaricato con successo, ma '{base_sbom_name}' non è stato trovato.")
+
+    # Rinominiamo il file in standard 'docker_sbom.json' per i futuri controlli del backend
+    shutil.move(target_path, os.path.join(STORAGE_DIR, "docker_sbom.json"))
+
+    # Calcolo Cross-Reference immediato per aggiornare i KPI del Frontend
+    # Recuperiamo le informazioni del codice precedentemente salvate in STORAGE_DIR
+    def extract_identifiers(file_name):
+        file_path = os.path.join(STORAGE_DIR, file_name)
+        if not os.path.exists(file_path): return set()
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            identifiers = set()
+            components_list = data.get("components", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
+            for item in components_list:
+                if isinstance(item, dict) and item.get("name"):
+                    identifiers.add(str(item["name"]).lower().strip())
+            return identifiers
+        except Exception: return set()
+
+    req_identifiers = extract_identifiers("trivy_requirements.json")
+    poetry_identifiers = extract_identifiers("trivy_poetry.json")
+    
+    all_code_names = req_identifiers.union(poetry_identifiers)
+    all_code_purls = {f"pkg:pypi/{name}" for name in all_code_names}
+
+    # Carichiamo i componenti appena scaricati dal Docker
+    docker_components = []
+    try:
+        with open(os.path.join(STORAGE_DIR, "docker_sbom.json"), "r", encoding="utf-8") as f:
+            d_data = json.load(f)
+        for c in d_data.get("components", []):
+            if isinstance(c, dict):
+                docker_components.append({
+                    "name": c.get("name", "unknown"),
+                    "version": c.get("version", "unknown"),
+                    "purl": c.get("purl", "")
+                })
+    except Exception as e:
+        raise HTTPException(500, f"Errore nel parsing del nuovo SBOM Docker: {str(e)}")
+
+    in_common = []
+    only_in_docker = []
+
+    for dc in docker_components:
+        dc_name_clean = dc["name"].lower().strip()
+        dc_purl_clean = dc["purl"].lower().strip() if dc["purl"] else ""
+        match_found = False
+        
+        if dc_purl_clean:
+            if dc_purl_clean in all_code_purls:
+                match_found = True
+            else:
+                for cp in all_code_purls:
+                    if dc_purl_clean in cp or cp in dc_purl_clean:
+                        match_found = True
+                        break
+        else:
+            if dc_name_clean in all_code_names:
+                match_found = True
+
+        if match_found:
+            in_common.append(dc)
+        else:
+            only_in_docker.append(dc)
+
+    docker_report = {
+        "total_docker_packages": len(docker_components),
+        "packages_in_common_count": len(in_common),
+        "packages_only_in_docker_count": len(only_in_docker),
+        "in_common": in_common,
+        "only_in_docker": only_in_docker
+    }
+
+    return {
+        "status": "success", 
+        "github_run_url": docker_action_info["html_url"], 
+        "message": "SBOM Docker generato, scaricato e confrontato con successo.",
+        "docker_report": docker_report
+    }
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="127.0.0.1", port=8000)

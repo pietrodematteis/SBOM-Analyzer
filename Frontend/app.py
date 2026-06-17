@@ -31,9 +31,34 @@ st.subheader("1. Configurazione Target & SBOM di Base")
 
 repo_url = st.text_input("GitHub Repository URL", value=st.session_state.saved_repo, placeholder="https://github.com/owner/repo")
 branch = st.text_input("Branch", value=st.session_state.saved_branch)
-
-# Uploader specifico per l'immagine Docker 
-docker_file = st.file_uploader("🐳 Opzionale: Carica lo SBOM dell'immagine Docker (JSON)", type=["json"])
+st.info("⚡ Inserisci la URL della repository GitHub e il branch da analizzare.")
+st.markdown("---")
+docker_choice = st.radio(
+    "🐳 Origine Analisi Immagine Docker:",
+    ["Genera SBOM Docker", "Carica SBOM Docker esistente (JSON)"],
+    horizontal=False
+)
+    
+docker_file = None
+if docker_choice == "Carica SBOM Docker esistente (JSON)":
+    docker_file = st.file_uploader("Carica lo SBOM dell'immagine Docker", type=["json"])
+elif docker_choice == "Genera SBOM Docker":
+    docker_image_tag = st.text_input(
+        "Tag Immagine / Nome Dockerfile custom:",
+        value="stfbk/tlsassistant:v3.2-dev2-ACN",
+        placeholder="es. stfbk/tlsassistant:v3.2-dev2-ACN o ./docker/Dockerfile"
+    )
+    vuln_type = st.selectbox(
+    "Seleziona cosa scansionare nell'immagine Docker:",
+    options=["os,library", "os", "library"],
+    format_func=lambda x: {
+        "os,library": "Tutto (Sia OS che Librerie di linguaggio)",
+        "os": "Solo pacchetti del Sistema Operativo",
+        "library": "Solo librerie dell'applicazione"
+    }[x],
+    index=0  # Default su tutto
+)
+    st.info("⚡ Verrà inviato questo target alla pipeline remota di GitHub Actions.")
 
 st.markdown("---")
 sbom_choice = st.radio(
@@ -120,6 +145,7 @@ if st.session_state.sbom_ready:
                     if res.status_code == 200:
                         st.session_state.analysis_results = res.json()
                         st.success("Tabella di confronto generata!")
+                        st.rerun()
                     else:
                         st.error(f"Errore dal server FastAPI: {res.text}")
                         st.session_state.analysis_results = None
@@ -157,7 +183,9 @@ if st.session_state.sbom_ready:
         comparison_report = result.get("comparison_matrix", None)
         raw_req = result.get("raw_requirements", None)
         raw_poe = result.get("raw_poetry", None)
-        docker_report = result.get("docker_report", {}) # Recupero dati docker dal backend
+        
+        # Correzione: Estrazione dinamica del report ad ogni ciclo di esecuzione dello stato
+        docker_report = result.get("docker_report", {})
 
         st.markdown("---")
         st.markdown("### 📦 Elenco Dipendenze Rilevate nel Codice")
@@ -211,47 +239,80 @@ if st.session_state.sbom_ready:
                         )
 
         # ============================================================
-        # AGGIUNTO: TABELLA 2 CONDIZIONALE (CONFRONTO IMMAGINE DOCKER)
+        # SEZIONE DI ANALISI IMMAGINE DOCKER 
         # ============================================================
         st.markdown("---")
         st.subheader("🐳 Sezione di Analisi Immagine Docker")
         
-        if not docker_file:
-            st.info("💡 Carica il file JSON dello SBOM Docker al 'Punto 1' per sbloccare questa sezione di confronto massivo.")
+        if docker_choice == "Genera SBOM Docker":
+            if st.button("🐳 Avvia Generazione Pipeline & Confronto Docker", use_container_width=True):
+                with st.spinner("Compilazione immagine in corso su GitHub Actions e analisi Trivy..."):
+                    try:
+                        res_docker = requests.post(
+                            f"{BACKEND_URL}/generate-docker-sbom",
+                            params={
+                                "repo_url": st.session_state.saved_repo,
+                                "branch": st.session_state.saved_branch,
+                                "docker_target": docker_image_tag,
+                                "vuln_type": vuln_type
+                            }
+                        )
+                        if res_docker.status_code == 200:
+                            response_data = res_docker.json()
+                            
+                            if "docker_report" in response_data:
+                                if st.session_state.analysis_results:
+                                    st.session_state.analysis_results["docker_report"] = response_data["docker_report"]
+                                else:
+                                    st.session_state.analysis_results = {"docker_report": response_data["docker_report"]}
+                            
+                            st.session_state.docker_analyzed = True
+                            st.success("SBOM Docker generato con successo! Statistiche aggiornate sotto.")
+                            st.rerun()
+                        else:
+                            st.error(f"Errore generazione Docker: {res_docker.text}")
+                    except Exception as e:
+                        st.error(f"Errore di connessione: {str(e)}")
+
+        elif docker_choice == "Carica SBOM Docker esistente (JSON)":
+            if docker_file and not st.session_state.docker_analyzed:
+                if st.button("📊 Applica File Docker Caricato al Confronto", use_container_width=True):
+                    st.session_state.docker_analyzed = True
+                    st.rerun()
+
+        # Rendering dei risultati
+        if st.session_state.docker_analyzed and docker_report and docker_report.get("total_docker_packages", 0) > 0:
+            st.markdown("#### 📊 Statistiche e Deviazioni dell'Immagine Docker")
+            
+            kpi1, kpi2, kpi3 = st.columns(3)
+            kpi1.metric("Totale Pacchetti nel Docker", docker_report.get("total_docker_packages", 0))
+            kpi2.metric("✅ In Comune con il Codice", docker_report.get("packages_in_common_count", 0))
+            kpi3.metric("⚠️ Esclusivi Docker", docker_report.get("packages_only_in_docker_count", 0))
+
+            st.download_button(
+                label="⬇️ Scarica Report Deviazioni Docker (JSON completo)",
+                data=json.dumps(docker_report, indent=2),
+                file_name="docker_cross_reference_report.json",
+                mime="application/json",
+                use_container_width=True
+            )
+            
+            with st.expander(f"🟢 Pacchetti dell'Immagine Presenti nel Codice ({docker_report.get('packages_in_common_count')})"):
+                if docker_report.get("in_common"):
+                    st.dataframe(pd.DataFrame(docker_report["in_common"]), use_container_width=True)
+                else:
+                    st.info("Nessuna corrispondenza trovata.")
+
+            with st.expander(f"🔴 Pacchetti Isolati solo dentro l'Immagine Docker ({docker_report.get('packages_only_in_docker_count')})"):
+                if docker_report.get("only_in_docker"):
+                    st.dataframe(pd.DataFrame(docker_report["only_in_docker"]), use_container_width=True)
+                else:
+                    st.info("Nessun pacchetto extra rilevato.")
         else:
-            # Il bottone appare sotto e solo se lo SBOM del codice è già stato calcolato
-            if st.button("🐳 Avvia Confronto Strutturato Immagine Docker", use_container_width=True):
-                st.session_state.docker_analyzed = True
-
-            if st.session_state.docker_analyzed and docker_report:
-                st.markdown("#### 📊 Statistiche e Deviazioni dell'Immagine Docker")
-                
-                # Indicatori KPI chiave in evidenza per dockerfile
-                kpi1, kpi2, kpi3 = st.columns(3)
-                kpi1.metric("Totale Pacchetti nel Docker", docker_report.get("total_docker_packages", 0))
-                kpi2.metric("✅ In Comune con il Codice", docker_report.get("packages_in_common_count", 0))
-                kpi3.metric("⚠️ Esclusivi Docker", docker_report.get("packages_only_in_docker_count", 0))
-
-                st.download_button(
-                    label="⬇️ Scarica Report Deviazioni Docker (JSON completo)",
-                    data=json.dumps(docker_report, indent=2),
-                    file_name="docker_cross_reference_report.json",
-                    mime="application/json",
-                    use_container_width=True
-                )
-                
-                # Sezioni collassabili ad alte prestazioni per mostrare i record filtrati
-                with st.expander(f"🟢 Pacchetti dell'Immagine Presenti nel Codice ({docker_report.get('packages_in_common_count')})"):
-                    if docker_report.get("in_common"):
-                        st.dataframe(pd.DataFrame(docker_report["in_common"]), use_container_width=True)
-                    else:
-                        st.info("Nessuna corrispondenza trovata.")
-
-                with st.expander(f"🔴 Pacchetti Isolati solo dentro l'Immagine Docker ({docker_report.get('packages_only_in_docker_count')})"):
-                    if docker_report.get("only_in_docker"):
-                        st.dataframe(pd.DataFrame(docker_report["only_in_docker"]), use_container_width=True)
-                    else:
-                        st.info("Nessun pacchetto extra rilevato.")
+            if docker_choice == "Genera SBOM Docker":
+                st.info("💡 Clicca sul pulsante sopra per avviare la compilazione remota dell'immagine Docker e analizzarla.")
+            else:
+                st.info("💡 Carica lo SBOM Docker al Punto 1 e clicca su 'Applica File Docker Caricato al Confronto' per vedere l'analisi.")
 
         # ============================================================
         # TAB DI TRASPARENZA IN CODA (LOGS E FILE COMPLETI)
