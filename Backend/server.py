@@ -22,6 +22,8 @@ GITHUB_API = "https://api.github.com/repos"
 MY_GITHUB_OWNER = os.getenv("MY_GITHUB_OWNER", "RiccardoCortese")
 MY_GITHUB_REPO = os.getenv("MY_GITHUB_REPO", "SBOM-Analyzer")
 
+print(f"[DEBUG] STORAGE_DIR: {STORAGE_DIR}", flush=True)
+
 
 # ============================================================
 # AUTH GITHUB
@@ -182,29 +184,37 @@ def wait_and_download_artifacts(run_id: int, dest_dir: str):
     # Download del pacchetto ZIP dell'artifact
     download_url = target_artifact["archive_download_url"]
     res_dl = requests.get(download_url, headers=headers, stream=True)
-    if res_dl.status_code == 200:
-        zip_path = os.path.join(dest_dir, "artifacts.zip")
-        with open(zip_path, "wb") as f:
-            shutil.copyfileobj(res_dl.raw, f)
+    if res_dl.status_code != 200:
+        return False
         
-        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-            zip_ref.extractall(dest_dir)
-        return True
+    zip_path = os.path.join(dest_dir, "artifacts.zip")
+    with open(zip_path, "wb") as f:
+        shutil.copyfileobj(res_dl.raw, f)
+    
+    # Setup cartelle di destinazione
     manifests_dir = os.path.join(dest_dir, "manifests")
     deps_dir = os.path.join(dest_dir, "dependencies")
     os.makedirs(manifests_dir, exist_ok=True)
     os.makedirs(deps_dir, exist_ok=True)
-
-    # Smistamento file
-    for file_name in os.listdir(dest_dir):
-        file_path = os.path.join(dest_dir, file_name)
-        if os.path.isfile(file_path) and file_name.endswith(".json"):
-            # Se è un manifest noto
-            if "requirements" in file_name or "poetry" in file_name:
-                shutil.move(file_path, os.path.join(manifests_dir, file_name))
-            # Se è un altro SBOM (dipendenze profonde)
-            elif file_name != "docker_sbom.json":
-                shutil.move(file_path, os.path.join(deps_dir, file_name))
+    
+    # Estrazione e smistamento immediato
+    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+        for file_name in zip_ref.namelist():
+            if file_name.endswith(".json"):
+                # Estrai il file temporaneamente
+                zip_ref.extract(file_name, dest_dir)
+                file_path = os.path.join(dest_dir, file_name)
+                
+                # Smista in base al nome
+                if "requirements" in file_name or "poetry" in file_name:
+                    shutil.move(file_path, os.path.join(manifests_dir, file_name))
+                elif file_name != "docker_sbom.json" and file_name != "cyclonedx-license-SBOM.json" and file_name != "cyclonedx-vuln-SBOM.json":
+                    shutil.move(file_path, os.path.join(deps_dir, file_name))
+    
+    # Rimuovi lo zip dopo aver estratto
+    if os.path.exists(zip_path):
+        os.remove(zip_path)
+        
     return True
 
 
@@ -297,7 +307,7 @@ async def upload_sbom(
 
 
 # ============================================================
-# ANALISI COMPARATIVA INTEGRATA
+# ANALISI COMPARATIVA INTEGRATA per il file dependencies.json del repository Git
 # ============================================================
 
 @app.post("/compare-dependencies")
@@ -418,8 +428,8 @@ def compare_dependencies(repo_url: str, branch: str, path_dipendenze: str, forma
                     return None
             return None
 
-        raw_requirements = read_raw_file("trivy_requirements.json")
-        raw_poetry = read_raw_file("trivy_poetry.json")
+        raw_requirements = read_raw_file(os.path.join("manifests", "trivy_requirements.json"))
+        raw_poetry = read_raw_file(os.path.join("manifests", "trivy_poetry.json"))
 
         simulated_matrix = (
             f"=== REPORT REALE PIPELINE ACTIONS ===\n"
@@ -448,7 +458,7 @@ def compare_dependencies(repo_url: str, branch: str, path_dipendenze: str, forma
     finally:
         shutil.rmtree(tmp_clone, ignore_errors=True)
 # ============================================================
-# ANALISI COMPONENTI DEPENDENCIES.JSON IN PARALLELO
+# ANALISI COMPONENTI DEPENDENCIES.JSON IN PARALLELO (con github action remota) e generazione SBOM per singole dipendenze
 # ============================================================
 
 @app.post("/analyze-dependencies-sbom")
@@ -500,17 +510,15 @@ def analyze_dependencies_sbom(repo_url: str, branch: str, path_dipendenze: str =
     }
  
 # ============================================================
-# GENERAZIONE SBOM DOCKER REMOTA
+# GENERAZIONE SBOM DOCKER REMOTA e ANALISI COMPARATIVA IMMEDIATA
 # ============================================================
 
 @app.post("/generate-docker-sbom")
 def generate_docker_sbom(docker_target: str, vuln_type: str = "os,library"):
-    for sub in ["manifests", "dependencies"]:
-        path = os.path.join(STORAGE_DIR, sub)
-        if os.path.exists(path):
-            shutil.rmtree(path)
-        os.makedirs(path)
-        
+    
+    os.makedirs(os.path.join(STORAGE_DIR, "manifests"), exist_ok=True)
+    os.makedirs(os.path.join(STORAGE_DIR, "dependencies"), exist_ok=True)
+    
     print(f"[BACKEND] Avvio pipeline Docker per l'immagine: {docker_target}", flush=True)
     
     # Allineamento Input con la tua GitHub Action (image_repository)
@@ -569,21 +577,34 @@ def generate_docker_sbom(docker_target: str, vuln_type: str = "os,library"):
     def get_all_code_identifiers():
         all_names = set()
         all_purls = set()
+        
+        # Definiamo i file/pattern da ignorare assolutamente
+        ignore_files = {"docker_sbom.json", "cyclonedx-vuln-SBOM.json", "cyclonedx-license-SBOM.json"}
+        
         target_dirs = [
             os.path.join(STORAGE_DIR, "manifests"),
             os.path.join(STORAGE_DIR, "dependencies")
         ]
+        
         for folder in target_dirs:
-            if not os.path.exists(folder): continue
-            for file_name in os.listdir(folder):
-                if file_name.endswith(".json"):
-                    n, p = extract_identifiers(os.path.join(folder, file_name))
-                    all_names.update(n)
-                    all_purls.update(p)
+            if not os.path.exists(folder):
+                continue
+                
+            # Usiamo walk solo dentro le cartelle che ci interessano
+            for root, dirs, files in os.walk(folder):
+                for file_name in files:
+                    # 1. Deve essere un JSON
+                    # 2. Non deve essere tra quelli da ignorare
+                    if file_name.endswith(".json") and file_name not in ignore_files:
+                        file_path = os.path.join(root, file_name)
+                        
+                        n, p = extract_identifiers(file_path)
+                        all_names.update(n)
+                        all_purls.update(p)
+                        
         return all_names, all_purls
 
     # 3. CHIAMA LA FUNZIONE E OTTIENI I SET PULITI
-   # 3. CHIAMA LA FUNZIONE E OTTIENI I SET PULITI
     all_code_names, all_code_purls = get_all_code_identifiers()
 
     # Carichiamo i componenti appena scaricati dal Docker
@@ -603,6 +624,7 @@ def generate_docker_sbom(docker_target: str, vuln_type: str = "os,library"):
 
     in_common = []
     only_in_docker = []
+    
 
     # Creiamo il set di PURL del codice pulito per il confronto accurato
     cleaned_code_purls = {_clean_purl(cp) for cp in all_code_purls if cp}
