@@ -306,10 +306,11 @@ if st.session_state.sbom_ready:
         if st.session_state.docker_analyzed and current_docker_report and current_docker_report.get("total_docker_packages", 0) > 0:
             st.markdown("#### 📊 Statistiche e Deviazioni dell'Immagine Docker")
             
-            kpi1, kpi2, kpi3 = st.columns(3)
+            kpi1, kpi2, kpi3, kpi4 = st.columns(4)
             kpi1.metric("Totale Pacchetti nel Docker", current_docker_report.get("total_docker_packages", 0))
             kpi2.metric("✅ In Comune con il Codice", current_docker_report.get("packages_in_common_count", 0))
             kpi3.metric("⚠️ Esclusivi Docker", current_docker_report.get("packages_only_in_docker_count", 0))
+            kpi4.metric("❗ Versioni Differenti", current_docker_report.get("packages_with_version_mismatches_count", 0))
 
             raw_docker_sbom = current_results.get("raw_docker_sbom", "")
 
@@ -352,6 +353,23 @@ if st.session_state.sbom_ready:
                     st.dataframe(pd.DataFrame(current_docker_report["only_in_docker"]), use_container_width=True)
                 else:
                     st.info("Nessun pacchetto extra rilevato.")
+            
+           # Sostituisci il tuo blocco expander con questo:
+            with st.expander(f"⚠️ Pacchetti con Versioni Differenti ({len(current_docker_report.get('version_mismatches', []))})"):
+                mismatches = current_docker_report.get("version_mismatches", [])
+                
+                if mismatches:
+                    # Trasformiamo la lista di dizionari in un DataFrame leggibile
+                    df_mismatch = pd.DataFrame([
+                        {
+                            "Componente": m["docker"]["name"],
+                            "Versione Docker": m["docker"].get("version", "-"),
+                            "Versione altri SBOM": m.get("code_version", "-") 
+                        } for m in mismatches
+                    ])
+                    st.dataframe(df_mismatch, use_container_width=True)
+                else:
+                    st.info("Nessuna discrepanza di versione rilevata.")
         else:
             if docker_choice == "Genera SBOM Docker":
                 st.info("💡 Clicca sul pulsante sopra per avviare la compilazione remota dell'immagine Docker e analizzarla.")

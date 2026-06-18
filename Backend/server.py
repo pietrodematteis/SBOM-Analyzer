@@ -624,11 +624,22 @@ def generate_docker_sbom(docker_target: str, vuln_type: str = "os,library"):
 
     in_common = []
     only_in_docker = []
+    version_mismatches = []
     
-
-    # Creiamo il set di PURL del codice pulito per il confronto accurato
-    cleaned_code_purls = {_clean_purl(cp) for cp in all_code_purls if cp}
-
+    # Creiamo una mappa dei nomi dei pacchetti nel codice con le loro versioni per un confronto più accurato
+    code_version_map = {}
+    for p in all_code_purls:
+        if "@" in p:
+            parts = p.split("@")
+            version = parts[-1]
+            # Estraiamo il nome dal PURL (es. pkg:pypi/nome -> nome)
+            name = parts[0].split("/")[-1].lower().strip()
+            code_version_map[name] = version
+    
+    all_code_names_only = {name.split('@')[0].lower().strip() for name in all_code_names}
+    
+    print(f"[DEBUG] Esempio nomi nel codice: {list(all_code_names_only)[:5]}", flush=True)
+    
     # CONFRONTO OTTIMIZZATO
     for dc in docker_components:
         dc_name_clean = dc["name"].lower().strip()
@@ -640,7 +651,7 @@ def generate_docker_sbom(docker_target: str, vuln_type: str = "os,library"):
                 match_found = True
             else:
                 for cp in all_code_purls:
-                    if dc_purl_clean in cp or cp in dc_purl_clean:
+                    if dc_purl_clean in cp or cp in dc_purl_clean: # Controllo flessibile per versioni o parametri aggiuntivi
                         match_found = True
                         break
         else:
@@ -650,14 +661,25 @@ def generate_docker_sbom(docker_target: str, vuln_type: str = "os,library"):
         if match_found:
             in_common.append(dc)
         else:
-            only_in_docker.append(dc)
+            if dc_name_clean in all_code_names_only:
+                version_mismatches.append({
+                    "docker": dc,
+                    "code_version": code_version_map.get(dc_name_clean, "Versione non trovata")
+                })
+
+            else:
+                only_in_docker.append(dc)
+                
+    print(f"[DEBUG] Docker Components: {len(docker_components)}, In Common: {len(in_common)}, Only in Docker: {len(only_in_docker)}, Version Mismatches: {len(version_mismatches)}", flush=True)
 
     docker_report = {
         "total_docker_packages": len(docker_components),
         "packages_in_common_count": len(in_common),
         "packages_only_in_docker_count": len(only_in_docker),
+        "packages_with_version_mismatches_count": len(version_mismatches),
         "in_common": in_common,
-        "only_in_docker": only_in_docker
+        "only_in_docker": only_in_docker,
+        "version_mismatches": version_mismatches
     }
 
     # Per il download button del Frontend, restituiamo anche lo SBOM Docker completo in formato testo (raw)
