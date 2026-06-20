@@ -11,6 +11,9 @@ import time
 import zipfile
 from typing import Optional
 
+# ============================================================
+# CONFIGURAZIONE INIZIALE E VARIABILI GLOBALI
+# ============================================================
 load_dotenv()
 
 app = FastAPI(title="TLSAssistant Dependency Analyzer Backend")
@@ -39,7 +42,7 @@ def github_headers():
 
 
 # ============================================================
-# GITHUB PARSER
+# GITHUB PARSER per estrarre il nome del repository da una URL e formattarlo in modo standard 
 # ============================================================
 
 def parse_github_url(url: str) -> str:
@@ -58,7 +61,7 @@ def parse_github_url(url: str) -> str:
 
 
 # ============================================================
-# PURL
+# PURL: GENERAZIONE DI UN IDENTIFICATORE UNIVOCO IN FORMATO PURL PER OGNI COMPONENTE, BASATO SUL TIPO E SULLE INFORMAZIONI DISPONIBILI
 # ============================================================
 
 def build_purl(dep_type: str, name: str, version: str | None = None):
@@ -90,7 +93,7 @@ def classify(dep_type: str):
     }.get(dep_type, "unknown")
 
 # ============================================================
-# EXTRACT
+# EXTRACT: ESTRAZIONE DI NOME, VERSIONE E PURL DA UN OGGETTO DIPENDENZA, CON LOGICA SPECIFICA PER OGNI TIPO
 # ============================================================
 
 def extract(item):
@@ -206,7 +209,8 @@ def wait_and_download_artifacts(run_id: int, dest_dir: str):
     res_dl = requests.get(download_url, headers=headers, stream=True)
     if res_dl.status_code != 200:
         return False
-        
+    
+    # Salvataggio del file ZIP in una posizione temporanea
     zip_path = os.path.join(dest_dir, "artifacts.zip")
     with open(zip_path, "wb") as f:
         shutil.copyfileobj(res_dl.raw, f)
@@ -237,6 +241,9 @@ def wait_and_download_artifacts(run_id: int, dest_dir: str):
         
     return True
 
+# ============================================================
+# TRIGGER GITHUB ACTION per avviare pipeline remote specifiche e recuperare URL e ID della run
+# ============================================================
 
 def trigger_github_action(workflow_file: str, inputs: dict) -> Optional[dict]:
     """Innesca una pipeline remota specifica e restituisce un dizionario con URL e Run ID."""
@@ -287,7 +294,7 @@ def trigger_github_action(workflow_file: str, inputs: dict) -> Optional[dict]:
 
 
 # ============================================================
-# ACQUISIZIONE E SALVATAGGIO IN MEMORIA SERVER
+# ACQUISIZIONE E SALVATAGGIO IN MEMORIA SERVER di file JSON manuali o generati
 # ============================================================
 
 @app.post("/upload-sbom")
@@ -301,6 +308,7 @@ async def upload_sbom(
         shutil.rmtree(STORAGE_DIR)
     os.makedirs(STORAGE_DIR, exist_ok=True)
 
+    # Se l'azione è "upload", salviamo tutti i file manuali caricati (requirements, poetry, docker) per l'analisi comparativa
     if action == "upload":
         if not requirements_file and not poetry_file and not docker_file:
             raise HTTPException(400, "Carica almeno un file JSON.")
@@ -319,6 +327,7 @@ async def upload_sbom(
 
         return {"status": "success", "message": "File manuali salvati sul server."}
 
+    # Se l'azione è "generate", salviamo solo il file Docker (se presente) e prepariamo il server per la pipeline remota
     elif action == "generate":
         if docker_file:
             with open(os.path.join(STORAGE_DIR, "docker_sbom.json"), "wb") as f:
@@ -519,6 +528,7 @@ def analyze_dependencies_sbom(repo_url: str, branch: str, path_dipendenze: str =
     
     print(f"[BACKEND] Lettura file SBOM nelle cartelle: {folders_to_scan}", flush=True)
     
+    # Scansione dei file SBOM generati e caricamento in memoria per la visualizzazione
     for folder in folders_to_scan:
         if os.path.exists(folder):
             for file_name in os.listdir(folder):
@@ -613,6 +623,7 @@ def generate_docker_sbom(docker_target: str, vuln_type: str = "os,library"):
             return identifiers, purls
         except Exception: return set(), set()
 
+    # Funzione per aggregare tutti i nomi e PURL dai file JSON generati (manifests e dependencies) per il confronto con lo SBOM Docker
     def get_all_code_identifiers():
         all_names = set()
         all_purls = set()
@@ -683,17 +694,21 @@ def generate_docker_sbom(docker_target: str, vuln_type: str = "os,library"):
         dc_purl_clean = dc["purl"].lower().strip() if dc["purl"] else ""
         match_found = False
         
+        # se il PURL è disponibile, usiamolo per un confronto più preciso (inclusi versioni e parametri)
         if dc_purl_clean:
-            if dc_purl_clean in all_code_purls:
+            
+            if dc_purl_clean in all_code_purls: # se il PURL completo corrisponde, è un match diretto
                 match_found = True
-            else:
+            
+            else: # se non c'è un match diretto, facciamo un controllo flessibile per vedere se il PURL del Docker è contenuto in uno dei PURL del codice o viceversa (per gestire versioni o parametri aggiuntivi)
                 for cp in all_code_purls:
                     if dc_purl_clean in cp or cp in dc_purl_clean: # Controllo flessibile per versioni o parametri aggiuntivi
                         match_found = True
                         break
-        else:
-            if dc_name_clean in all_code_names:
-                match_found = True
+        #else:
+            # Se non abbiamo un PURL, facciamo un confronto basato solo sul nome (meno preciso ma utile come fallback)
+         #   if dc_name_clean in all_code_names:
+          #      match_found = True
 
         if match_found:
             in_common.append(dc)

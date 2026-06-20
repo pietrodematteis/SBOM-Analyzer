@@ -4,11 +4,19 @@ import pandas as pd
 import json
 from streamlit_agraph import agraph, Node, Edge, Config
 
+# ============================================================
+# CONFIGURAZIONE APP STREAMLIT
+# ============================================================
+
 st.set_page_config(page_title="SBOM Analyzer", layout="wide")
 st.title("SBOM Analyzer")
 
 BACKEND_URL = "http://127.0.0.1:8000"
 
+# ============================================================
+# STATE MANAGEMENT (Streamlit session_state)
+# Serve per mantenere lo stato tra return della UI
+# ============================================================
 # Inizializzazione Stati Permanenti di Streamlit
 if "sbom_ready" not in st.session_state:
     st.session_state.sbom_ready = False
@@ -26,7 +34,7 @@ if "docker_analyzed" not in st.session_state:
     st.session_state.docker_analyzed = False
 
 # ============================================================
-# CONFIGURAZIONE TARGET & SBOM DI BASE
+# CONFIGURAZIONE TARGET & SBOM DI BASE (Repo + SBOM Base + Docker)
 # ============================================================
 st.subheader("1. Configurazione Target & SBOM di Base")
 
@@ -34,6 +42,10 @@ repo_url = st.text_input("GitHub Repository URL", value=st.session_state.saved_r
 branch = st.text_input("Branch", value=st.session_state.saved_branch)
 st.info("⚡ Inserisci la URL della repository GitHub e il branch da analizzare.")
 st.markdown("---")
+
+# ============================================================
+# SELEZIONE INPUT DOCKER (generazione o upload SBOM esistente)
+# ============================================================
 docker_choice = st.radio(
     "🐳 Origine Analisi Immagine Docker:",
     ["Genera SBOM Docker", "Carica SBOM Docker esistente (JSON)"],
@@ -42,26 +54,41 @@ docker_choice = st.radio(
     
 docker_file = None
 if docker_choice == "Carica SBOM Docker esistente (JSON)":
+    # Se l'utente sceglie di caricare un file SBOM Docker, mostriamo il file uploader
+    
     docker_file = st.file_uploader("Carica lo SBOM dell'immagine Docker", type=["json"])
+
 elif docker_choice == "Genera SBOM Docker":
+    # Se l'utente sceglie di generare lo SBOM Docker, mostriamo i campi per il tag dell'immagine e il tipo di vulnerabilità da scansionare
+         
     docker_image_tag = st.text_input(
         "Tag Immagine / Nome Dockerfile custom:",
         value="stfbk/tlsassistant:v3.2-dev2-ACN",
         placeholder="es. stfbk/tlsassistant:v3.2-dev2-ACN o ./docker/Dockerfile"
     )
+    
+    # Tipo di vulnerabilità da scansionare con Trivy
     vuln_type = st.selectbox(
     "Seleziona cosa scansionare nell'immagine Docker:",
+    
     options=["os,library", "os", "library"],
+    
     format_func=lambda x: {
         "os,library": "Tutto (Sia OS che Librerie di linguaggio)",
         "os": "Solo pacchetti del Sistema Operativo",
         "library": "Solo librerie dell'applicazione"
     }[x],
+    
     index=0  # Default su tutto
 )
     st.info("⚡ Verrà inviato questo target alla pipeline remota di GitHub Actions.")
 
 st.markdown("---")
+
+# ============================================================
+# SBOM STATICO (generazione o upload)
+# ============================================================
+
 sbom_choice = st.radio(
     "Scegli l'origine dello SBOM di base:",
     ["Genera SBOM Statico da zero", "Carica file SBOM esistenti"],
@@ -72,17 +99,23 @@ requirements_file = None
 poetry_file = None
 
 if sbom_choice == "Carica file SBOM esistenti":
+    # Se l'utente sceglie di caricare file SBOM esistenti, mostriamo due file uploader affiancati per i formati requirements e poetry
+    
     col1, col2 = st.columns(2)
     with col1:
         requirements_file = st.file_uploader("Carica JSON Requirements", type=["json"])
     with col2:
         poetry_file = st.file_uploader("Carica JSON Poetry", type=["json"])
+        
 elif sbom_choice == "Genera SBOM Statico da zero":
+    # Se l'utente sceglie di generare lo SBOM da zero, mostriamo un selectbox per scegliere il formato da generare tramite la pipeline
+    
     format_type = st.selectbox(
         "Seleziona il formato da generare tramite la pipeline:",
         options=["entrambi", "requirements", "poetry"],
         format_func=lambda x: x.capitalize()
     )
+    
     st.session_state.saved_format = format_type
 
 if st.button("🔄 Invia e Mantieni in Memoria sul Server"):
@@ -120,6 +153,7 @@ st.markdown("---")
 # ANALISI COMPARATIVA DINAMICA & DEEP INSPECTION
 # ============================================================
 if st.session_state.sbom_ready:
+   
     st.subheader("2. Analisi Comparativa Dinamica")
 
     path_dipendenze = st.text_input(
@@ -130,11 +164,16 @@ if st.session_state.sbom_ready:
     btn_col1, btn_col2 = st.columns(2)
 
     with btn_col1:
+        
         if st.button("📊 Genera Tabella di Confronto Base", use_container_width=True):
+            
             with st.spinner("Innesco pipeline e calcolo matrice in corso..."):
+        
                 try:
+        
                     fmt = st.session_state.saved_format if sbom_choice == "Genera SBOM Statico da zero" else "manual_only"
                     res = requests.post(
+                        # Endpoint di confronto che restituisce la matrice di confronto e i risultati per il rendering
                         f"{BACKEND_URL}/compare-dependencies",
                         params={
                             "repo_url": st.session_state.saved_repo,
@@ -143,21 +182,33 @@ if st.session_state.sbom_ready:
                             "format": fmt,
                         },
                     )
+                    
+                    # risposta di successo: aggiorna lo stato con i risultati dell'analisi per il rendering dinamico della tabella e dei KPI
                     if res.status_code == 200:
+                        
                         st.session_state.analysis_results = res.json()
                         st.success("Tabella di confronto generata!")
                         st.rerun()
+                    
                     else:
+                    
                         st.error(f"Errore dal server FastAPI: {res.text}")
                         st.session_state.analysis_results = None
+                
                 except Exception as e:
+        
                     st.error(f"Errore durante l'elaborazione: {str(e)}")
                     st.session_state.analysis_results = None
 
     with btn_col2:
+        
+        # Pulsante per avviare la Deep Inspection (analisi riga per riga di ogni sottodipendenza)
         if st.button("🔍 Avvia Deep Inspection (Genera SBOM Dipendenze)", use_container_width=True):
+        
             with st.spinner("Trivy sta analizzando ogni singola sottodipendenza..."):
+        
                 try:
+        
                     res = requests.post(
                         f"{BACKEND_URL}/analyze-dependencies-sbom",
                         params={
@@ -166,35 +217,49 @@ if st.session_state.sbom_ready:
                             "path_dipendenze": path_dipendenze,
                         },
                     )
+        
                     if res.status_code == 200:
+        
                         st.session_state.deep_sbom_results = res.json()
                         st.success("Deep Inspection completata! Ora puoi scaricare gli SBOM riga per riga.")
+        
                     else:
+        
                         st.error(f"Errore dal server: {res.text}")
                         st.session_state.deep_sbom_results = None
+                        
                 except Exception as e:
+                    
                     st.error(f"Errore di connessione: {str(e)}")
                     st.session_state.deep_sbom_results = None
 
     # DIPENDENZE DEL CODICE (SORGENTE)
     if st.session_state.analysis_results is not None:
+        
         result = st.session_state.analysis_results
         dependencies = result.get("result", [])
         git_repos = [item["url"] for item in dependencies if item.get("url") and "github.com" in item["url"]]
         comparison_report = result.get("comparison_matrix", None)
         raw_req = result.get("raw_requirements", None)
         raw_poe = result.get("raw_poetry", None)
+        component_type = result.get("component_type", None)
         
         # Estrazione dinamica del report ad ogni ciclo di esecuzione dello stato
         docker_report = result.get("docker_report", {})
 
         st.markdown("---")
+        
+        # ============================================================
+        # TABELLONE DINAMICO DI CONFRONTO (con possibilità di download dei singoli SBOM riga per riga)
+        # ============================================================    
         st.markdown("### 📦 Elenco Dipendenze Rilevate nel Codice")
         
         if dependencies:
-            col_tipo, col_comp, col_sorg, col_req, col_poe, col_az = st.columns([1, 2, 3, 1.5, 1.5, 1.5])
+           
+            col_tipo, col_comp, col_type, col_sorg, col_req, col_poe, col_az = st.columns([1, 2, 1.5, 3, 1.5, 1.5, 1.5])
             with col_tipo: st.markdown("**Tipo**")
             with col_comp: st.markdown("**Componente**")
+            with col_type: st.markdown("**Tipo Componente**")
             with col_sorg: st.markdown("**Sorgente / PURL**")
             with col_req:  st.markdown("**In Requirements**")
             with col_poe:  st.markdown("**In Poetry**")
@@ -202,12 +267,15 @@ if st.session_state.sbom_ready:
             st.markdown("---")
 
             for idx, item in enumerate(dependencies):
+                
+                # Estrazione dinamica dei dati di ogni dipendenza, con gestione
                 c_tipo = item.get("type", "-")
                 c_name = item.get("name", "-")
                 c_url  = item.get("url", "-")
                 c_req  = item.get("present_in_requirements", "❌")
                 c_poe  = item.get("present_in_poetry", "❌")
                 
+                # Creazione dinamica di una riga per ogni dipendenza, con possibilità di scaricare lo SBOM specifico di quella riga se disponibile
                 r_tipo, r_comp, r_sorg, r_req, r_poe, r_az = st.columns([1, 2, 3, 1.5, 1.5, 1.5])
                 with r_tipo: st.write(c_tipo)
                 with r_comp: st.write(c_name)
@@ -215,7 +283,8 @@ if st.session_state.sbom_ready:
                 with r_req:  st.write(c_req)
                 with r_poe:  st.write(c_poe)
                 
-                with r_az:
+                with r_az: # Logica per il download dello SBOM specifico di quella dipendenza (se disponibile)
+           
                     clean_repo_name = c_url.replace("https://github.com/", "").replace("/", "-").replace(".git", "")
                     
                     deep_results = st.session_state.get("deep_sbom_results") or {}
@@ -248,9 +317,13 @@ if st.session_state.sbom_ready:
         st.subheader("🐳 Sezione di Analisi Immagine Docker")
         
         if docker_choice == "Genera SBOM Docker":
+            
             if st.button("🐳 Avvia Generazione Pipeline & Confronto Docker", use_container_width=True):
+            
                 with st.spinner("Compilazione immagine in corso su GitHub Actions e analisi Trivy..."):
+            
                     try:
+            
                         res_docker = requests.post(
                             f"{BACKEND_URL}/generate-docker-sbom",
                             params={
@@ -260,17 +333,26 @@ if st.session_state.sbom_ready:
                                 "vuln_type": vuln_type
                             }
                         )
+            
                         if res_docker.status_code == 200:
+            
                             response_data = res_docker.json()
+            
                             if "graphs" in response_data:
+            
                                 st.session_state["docker_results"] = {"graphs": response_data["graphs"]}
                             
                             if "docker_report" in response_data:
+            
                                 # Se esiste già un'analisi del codice base, iniettiamo i dati Docker al suo interno
+            
                                 if st.session_state.analysis_results is not None:
+            
                                     st.session_state.analysis_results["docker_report"] = response_data["docker_report"]
                                     st.session_state.analysis_results["raw_docker_sbom"] = response_data.get("raw_docker_sbom", "")
+            
                                 else:
+            
                                     # Fallback: se l'utente non ha premuto il Bottone 1, creiamo la struttura minima
                                     st.session_state.analysis_results = {
                                         "result": [],
@@ -281,16 +363,22 @@ if st.session_state.sbom_ready:
                             st.session_state.docker_analyzed = True
                             st.success("SBOM Docker generato con successo! Statistiche aggiornate sotto.")
                             st.rerun()
+            
                         else:
                             st.error(f"Errore generazione Docker: {res_docker.text}")
+            
                     except Exception as e:
                         st.error(f"Errore di connessione: {str(e)}")
 
         elif docker_choice == "Carica SBOM Docker esistente (JSON)":
+            
             if docker_file and not st.session_state.docker_analyzed:
+            
                 if st.button("📊 Applica File Docker Caricato al Confronto", use_container_width=True):
+            
                     # Se carichi manualmente lo SBOM, ci assicuriamo che esista un contenitore in session_state
                     if st.session_state.analysis_results is None:
+            
                         st.session_state.analysis_results = {"result": [], "docker_report": {}}
                     
                     try:
@@ -300,6 +388,7 @@ if st.session_state.sbom_ready:
                         # o gestisci il parsing del dizionario custom caricato.
                         st.session_state.docker_analyzed = True
                         st.rerun()
+            
                     except Exception as e:
                         st.error(f"Errore nel parsing del file JSON caricato: {str(e)}")
 
@@ -309,6 +398,7 @@ if st.session_state.sbom_ready:
 
         # Rendering dei risultati dinamici basati sullo stato aggiornato
         if st.session_state.docker_analyzed and current_docker_report and current_docker_report.get("total_docker_packages", 0) > 0:
+            
             st.markdown("#### 📊 Statistiche e Deviazioni dell'Immagine Docker")
             
             kpi1, kpi2, kpi3, kpi4 = st.columns(4)
@@ -332,7 +422,9 @@ if st.session_state.sbom_ready:
                 )
             
             with dl_col2:
+            
                 if raw_docker_sbom:
+            
                     st.download_button(
                         label="⬇️ Scarica SBOM Docker Completo",
                         data=raw_docker_sbom,
@@ -340,7 +432,9 @@ if st.session_state.sbom_ready:
                         mime="application/json",
                         use_container_width=True
                     )
+            
                 else:
+            
                     st.button(
                         label="🚫 SBOM Docker originale non disponibile",
                         disabled=True,
@@ -348,18 +442,27 @@ if st.session_state.sbom_ready:
                     )
             
             with st.expander(f"🟢 Pacchetti dell'Immagine Presenti nel Codice ({current_docker_report.get('packages_in_common_count', 0)})"):
+            
                 if current_docker_report.get("in_common"):
+            
                     st.dataframe(pd.DataFrame(current_docker_report["in_common"]), use_container_width=True)
+            
                 else:
+            
                     st.info("Nessuna corrispondenza trovata.")
 
             with st.expander(f"🔴 Pacchetti Isolati solo dentro l'Immagine Docker ({current_docker_report.get('packages_only_in_docker_count', 0)})"):
+            
                 if current_docker_report.get("only_in_docker"):
+            
                     st.dataframe(pd.DataFrame(current_docker_report["only_in_docker"]), use_container_width=True)
+            
                 else:
+            
                     st.info("Nessun pacchetto extra rilevato.")
             
             with st.expander(f"⚠️ Pacchetti con Versioni Differenti ({len(current_docker_report.get('version_mismatches', []))})"):
+            
                 mismatches = current_docker_report.get("version_mismatches", [])
                 
                 if mismatches:
@@ -372,12 +475,18 @@ if st.session_state.sbom_ready:
                         } for m in mismatches
                     ])
                     st.dataframe(df_mismatch, use_container_width=True)
+            
                 else:
+            
                     st.info("Nessuna discrepanza di versione rilevata.")
         else:
+            
             if docker_choice == "Genera SBOM Docker":
+            
                 st.info("💡 Clicca sul pulsante sopra per avviare la compilazione remota dell'immagine Docker e analizzarla.")
+            
             else:
+            
                 st.info("💡 Carica lo SBOM Docker al Punto 1 e clicca su 'Applica File Docker Caricato al Confronto' per vedere l'analisi.")
         
         # ============================================================
@@ -396,6 +505,7 @@ if st.session_state.sbom_ready:
             all_graphs = {**repo_graphs, **docker_graphs}
             
             if all_graphs:
+            
                 file_selezionato = st.selectbox(
                     "Seleziona lo SBOM da visualizzare nel grafo:", 
                     options=list(all_graphs.keys()),
@@ -418,7 +528,9 @@ if st.session_state.sbom_ready:
                 )
                 
                 agraph(nodes=nodes, edges=edges, config=config)
+            
             else:
+            
                 st.info("Esegui un'analisi (Repo o Docker) per generare i grafi.")
         # ============================================================
         # TAB DI TRASPARENZA IN CODA (LOGS E FILE COMPLETI)
@@ -436,19 +548,31 @@ if st.session_state.sbom_ready:
         current_tab_idx = 0
         
         with tabs[current_tab_idx]:
+           
             if git_repos:
-                for r in sorted(list(set(git_repos))): st.markdown(f"- [{r}]({r})" if r.startswith("http") else f"- {r}")
+           
+                for r in sorted(list(set(git_repos))): 
+                    # Se la URL è valida, rendila cliccabile; altrimenti, visualizzala come testo normale
+                    st.markdown(f"- [{r}]({r})" if r.startswith("http") else f"- {r}")
+            
             else: st.info("Nessuna repository GitHub mappata.")
         current_tab_idx += 1
 
         if comparison_report:
+
             with tabs[current_tab_idx]:
-                if result.get("github_run_url"): st.markdown(f"🌐 [Link Run Actions]({result.get('github_run_url')})")
+
+                if result.get("github_run_url"): 
+                    st.markdown(f"🌐 [Link Run Actions]({result.get('github_run_url')})")
+
                 st.text_area("Log di Confronto:", value=comparison_report, height=250)
+
             current_tab_idx += 1
 
         if raw_req:
+            
             with tabs[current_tab_idx]:
+            
                 st.download_button(
                     label="⬇️ Scarica Trivy Requirements JSON",
                     data=raw_req if isinstance(raw_req, str) else json.dumps(raw_req, indent=2),
@@ -460,6 +584,7 @@ if st.session_state.sbom_ready:
             current_tab_idx += 1
 
         if raw_poe:
+            
             with tabs[current_tab_idx]:
                 st.download_button(
                     label="⬇️ Scarica Trivy Poetry JSON",
