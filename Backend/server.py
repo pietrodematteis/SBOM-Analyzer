@@ -722,14 +722,69 @@ def generate_docker_sbom(docker_target: str, vuln_type: str = "os,library"):
             else:
                 only_in_docker.append(dc)
                 
+    # Ordiniamo i risultati per nome in modo case-insensitive per una visualizzazione più ordinata nel frontend
+    in_common = sorted(in_common, key=lambda x: x["name"].lower())
+    only_in_docker = sorted(only_in_docker, key=lambda x: x["name"].lower())
+    version_mismatches = sorted(version_mismatches, key=lambda x: x["docker"]["name"].lower())
+    
+    # elementi unici 
+    docker_components_unique = {f"{c['name'].lower().strip()}@{c['version']}": c for c in docker_components}.values()
+    docker_components_unique_names = {c['name'].lower().strip() for c in docker_components_unique}
+    print(f"[DEBUG] Totale componenti unici nel Docker SBOM: {len(docker_components_unique)}", flush=True)
+    print(f"[DEBUG] Totale nomi unici nel Docker SBOM: {len(docker_components_unique_names)}", flush=True)
+    
+    # Recuperiamo tutti i nomi e PURL (la tua logica esistente)
+    all_code_names, all_code_purls = get_all_code_identifiers()
+
+    # --- Analisi separata per le dipendenze che ci sono nel sorgente ma non nel docker SBOM ---
+    missing_raw = [] # Lista di componenti mancanti nel Docker SBOM
+    target_dirs = [os.path.join(STORAGE_DIR, "manifests"), os.path.join(STORAGE_DIR, "dependencies")] # Cartelle da scansionare per i file JSON generati
+    
+    
+    docker_purl_set = {dc["purl"].lower().strip() for dc in docker_components if dc.get("purl")}
+    
+    for folder in target_dirs:
+        if os.path.exists(folder):
+            for root, _, files in os.walk(folder):
+                for file_name in files:
+                    if file_name.endswith(".json") and file_name not in {"docker_sbom.json", "cyclonedx-vuln-SBOM.json", "cyclonedx-license-SBOM.json"}:
+                        with open(os.path.join(root, file_name), "r", encoding="utf-8") as f:
+                            data = json.load(f)
+                            items = data.get("components", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
+                            for c in items:
+                                if isinstance(c, dict) and c.get("purl"):
+                                    purl = str(c["purl"]).lower().strip()
+                                    if purl not in docker_purl_set:
+                                        missing_raw.append({
+                                            "name": c.get("name"),
+                                            "version": c.get("version"),
+                                            "purl": purl,
+                                            "source": file_name
+                                        })
+    
+    # Raggruppamento finale per il report
+    final_missing = {}
+    for item in missing_raw:
+        key = f"{item['name']}@{item['version']}"
+        if key not in final_missing:
+            final_missing[key] = {**item, "files": [item["source"]]}
+        elif item["source"] not in final_missing[key]["files"]:
+            final_missing[key]["files"].append(item["source"])
+    
+    missing_in_docker = list(final_missing.values())
+    # ------------------------------------------------------------------
+    
+
     docker_report = {
         "total_docker_packages": len(docker_components),
         "packages_in_common_count": len(in_common),
         "packages_only_in_docker_count": len(only_in_docker),
         "packages_with_version_mismatches_count": len(version_mismatches),
+        "packages_missing_in_docker_count": len(missing_in_docker),
         "in_common": in_common,
         "only_in_docker": only_in_docker,
-        "version_mismatches": version_mismatches
+        "version_mismatches": version_mismatches,
+        "missing_in_docker": missing_in_docker
     }
 
     # Per il download button del Frontend, restituiamo anche lo SBOM Docker completo in formato testo (raw)

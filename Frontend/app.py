@@ -271,14 +271,16 @@ if st.session_state.sbom_ready:
                 # Estrazione dinamica dei dati di ogni dipendenza, con gestione
                 c_tipo = item.get("type", "-")
                 c_name = item.get("name", "-")
+                c_type = item.get("component_type", "-")
                 c_url  = item.get("url", "-")
                 c_req  = item.get("present_in_requirements", "❌")
                 c_poe  = item.get("present_in_poetry", "❌")
                 
                 # Creazione dinamica di una riga per ogni dipendenza, con possibilità di scaricare lo SBOM specifico di quella riga se disponibile
-                r_tipo, r_comp, r_sorg, r_req, r_poe, r_az = st.columns([1, 2, 3, 1.5, 1.5, 1.5])
+                r_tipo, r_comp, r_type, r_sorg, r_req, r_poe, r_az = st.columns([1, 2, 1.5, 3, 1.5, 1.5, 1.5])
                 with r_tipo: st.write(c_tipo)
                 with r_comp: st.write(c_name)
+                with r_type: st.write(c_type)
                 with r_sorg: st.write(c_url)
                 with r_req:  st.write(c_req)
                 with r_poe:  st.write(c_poe)
@@ -401,11 +403,12 @@ if st.session_state.sbom_ready:
             
             st.markdown("#### 📊 Statistiche e Deviazioni dell'Immagine Docker")
             
-            kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+            kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5)
             kpi1.metric("Totale Pacchetti nel Docker", current_docker_report.get("total_docker_packages", 0))
-            kpi2.metric("✅ In Comune con il Codice", current_docker_report.get("packages_in_common_count", 0))
+            kpi2.metric("✅ In Comune con i Sorgenti", current_docker_report.get("packages_in_common_count", 0))
             kpi3.metric("⚠️ Esclusivi Docker", current_docker_report.get("packages_only_in_docker_count", 0))
-            kpi4.metric("❗ Versioni Differenti", current_docker_report.get("packages_with_version_mismatches_count", 0))
+            kpi4.metric("❗ Versioni Differenti (Tra Docker e Sorgenti)", current_docker_report.get("packages_with_version_mismatches_count", 0))
+            kpi5.metric("❌ Mancanti nel Docker", current_docker_report.get("packages_missing_in_docker_count", 0))
 
             raw_docker_sbom = current_results.get("raw_docker_sbom", "")
 
@@ -441,7 +444,7 @@ if st.session_state.sbom_ready:
                         use_container_width=True
                     )
             
-            with st.expander(f"🟢 Pacchetti dell'Immagine Presenti nel Codice ({current_docker_report.get('packages_in_common_count', 0)})"):
+            with st.expander(f"🟢 Pacchetti comuni tra Docker e Sorgente ({current_docker_report.get('packages_in_common_count', 0)})"):
             
                 if current_docker_report.get("in_common"):
             
@@ -451,8 +454,9 @@ if st.session_state.sbom_ready:
             
                     st.info("Nessuna corrispondenza trovata.")
 
-            with st.expander(f"🔴 Pacchetti Isolati solo dentro l'Immagine Docker ({current_docker_report.get('packages_only_in_docker_count', 0)})"):
-            
+            with st.expander(f"🔴 Pacchetti solo dentro l'Immagine Docker ({current_docker_report.get('packages_only_in_docker_count', 0)})"):
+                st. info("Questa sezione mostra i pacchetti presenti solo nell'immagine Docker. Si noti che alcune dipendenze possono essere presenti più volte con versioni diverse all'interno dello SBOM Docker. Questo perchè potrebbero esserci dei residui di build.")
+               
                 if current_docker_report.get("only_in_docker"):
             
                     st.dataframe(pd.DataFrame(current_docker_report["only_in_docker"]), use_container_width=True)
@@ -461,8 +465,8 @@ if st.session_state.sbom_ready:
             
                     st.info("Nessun pacchetto extra rilevato.")
             
-            with st.expander(f"⚠️ Pacchetti con Versioni Differenti ({len(current_docker_report.get('version_mismatches', []))})"):
-            
+            with st.expander(f"⚠️ Pacchetti con Versioni Differenti (Docker vs Sorgenti) ({len(current_docker_report.get('version_mismatches', []))})"):
+                st. info("Questa sezione mostra le discrepanze di versione tra i pacchetti rilevati nell'immagine Docker e quelli presenti nei sorgenti della repository. Si noti che alcune dipendenze possono essere presenti con versioni diverse all'interno dello SBOM Docker. Questo perchè potrebbero esserci dei residui di build.")
                 mismatches = current_docker_report.get("version_mismatches", [])
                 
                 if mismatches:
@@ -477,8 +481,26 @@ if st.session_state.sbom_ready:
                     st.dataframe(df_mismatch, use_container_width=True)
             
                 else:
-            
                     st.info("Nessuna discrepanza di versione rilevata.")
+            
+            with st.expander(f"❌ Pacchetti Mancanti nel Docker SBOM ({len(current_docker_report.get('missing_in_docker', []))})"):
+                st. info("Questa sezione mostra le dipendenze che sono presenti nei sorgenti della repository ma non sono state rilevate nell'immagine Docker. Questo può indicare che alcune librerie non sono state incluse nella build dell'immagine.")
+                missing_in_docker = current_docker_report.get("missing_in_docker", [])
+                
+                if missing_in_docker:
+                    # Trasformiamo la lista di dizionari in un DataFrame leggibile
+                    df_missing = pd.DataFrame([
+                        {
+                            "Componente": m.get("name", "-"),
+                            "Versione Sorgente": m.get("version", "-"),
+                            "PURL": m.get("purl", "-"),
+                            "File Sorgente": ", ".join(m.get("files", []))
+                        } for m in missing_in_docker
+                    ])
+                    st.dataframe(df_missing, use_container_width=True)
+            
+                else:
+                    st.info("Nessuna dipendenza mancante rilevata nel Docker SBOM.")
         else:
             
             if docker_choice == "Genera SBOM Docker":
@@ -493,7 +515,7 @@ if st.session_state.sbom_ready:
         # TAB DI VISUALIZZAZIONE GRAFICA DELLE DIPENDENZE
         # ============================================================
         st.markdown("---")
-        st.subheader("Analisi delle Dipendenze (Grafo)")
+        st.subheader("Analisi delle Dipendenze (Grafo & Albero)")
 
         with st.container():
             # Unione dei grafi che arrivano da analisi diverse (Repo o Docker)
@@ -505,26 +527,32 @@ if st.session_state.sbom_ready:
             all_graphs = {**repo_graphs, **docker_graphs}
             
             if all_graphs:
+                col_a, col_b = st.columns([2, 1])
+                with col_a:
+                    file_selezionato = st.selectbox(
+                        "Seleziona lo SBOM da visualizzare:", 
+                        options=list(all_graphs.keys()),
+                        key="grafo_select"
+                    )
+                with col_b:
+                    modalita = st.radio("Layout:", ["Grafo Libero", "Albero Gerarchico"], horizontal=True)
             
-                file_selezionato = st.selectbox(
-                    "Seleziona lo SBOM da visualizzare nel grafo:", 
-                    options=list(all_graphs.keys()),
-                    key="grafo_select" 
-                )
-                
                 graph_data = all_graphs[file_selezionato]
                 
                 # Creazione nodi e archi
                 nodes = [Node(id=n["id"], label=n["label"], size=15) for n in graph_data["nodes"]]
                 edges = [Edge(source=e["source"], target=e["target"]) for e in graph_data["edges"]]
                 
-                # Configurazione (aggiungiamo 'hierarchical' se il grafo è enorme)
+                is_hierarchical = (modalita == "Albero Gerarchico") # Se l'utente sceglie la modalità ad albero, abilitiamo il layout gerarchico
+                
                 config = Config(
                     height=500, 
                     width=700, 
                     directed=True, 
-                    physics=True,
-                    hierarchical=False 
+                    physics=not is_hierarchical, # Physics meno invasiva se è albero
+                    hierarchical=is_hierarchical,
+                    nodeHighlightBehavior=True,
+                    highlightColor="#F7A7A6"
                 )
                 
                 agraph(nodes=nodes, edges=edges, config=config)
