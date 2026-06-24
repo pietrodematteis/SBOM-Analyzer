@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       src_repository:
-        description: 'Repository target da clonare (owner/repo)'
+        description: 'Repository target da clonare'
         required: true
       src_branch:
         description: 'Branch della repo target'
@@ -16,147 +16,84 @@ on:
         default: 'dependencies.json'
 
 jobs:
-# ---------------------------------------------------
-# JOB 1 - PARSE DEPENDENCIES
-# ---------------------------------------------------
   parse-dependencies:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
-
     steps:
-      - name: Checkout target repo
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ github.event.inputs.src_repository }}
-          ref: ${{ github.event.inputs.src_branch }}
-
-      - name: Build dependency matrix
-        id: set-matrix
-        shell: bash
+      - uses: actions/checkout@v4
+      - id: set-matrix
         run: |
-          set -e
-
-          FILE="${{ github.event.inputs.path_dipendenze }}"
-          echo "Input path: $FILE"
-
-          echo "Workspace content:"
-          ls -R
-
-          # fallback intelligente
-          if [ ! -f "$FILE" ]; then
-            echo "File not found at: $FILE"
-            echo "Trying to locate dependencies.json..."
-
-            FILE_FOUND=$(find . -name "dependencies.json" | head -n 1)
-
-            if [ -z "$FILE_FOUND" ]; then
-              echo "ERROR: dependencies.json not found anywhere"
-              exit 1
-            fi
-
-            FILE="$FILE_FOUND"
-          fi
-
-          echo "Using file: $FILE"
-
-          MATRIX=$(jq -c '[.[] | select(.type == "git" or .type == "git-checkout" or .type == "git-submodule")]' "$FILE")
-
+          # Carica tutto il file JSON nella matrice
+          MATRIX=$(jq -c '.' ${{ github.event.inputs.path_dipendenze }})
           echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
-# ---------------------------------------------------
-# JOB 2 - ANALISI PARALLELA
-# ---------------------------------------------------
+
   trivy-analysis:
     needs: parse-dependencies
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJson(needs.parse-dependencies.outputs.matrix) }}
+        dep: ${{ fromJson(needs.parse-dependencies.outputs.matrix) }}
     
     steps:
-      - name: Setup repo name
-        id: repo
+      - name: Setup Workspace
+        run: mkdir -p workspace && cd workspace
+
+      - name: Process Dependency
         run: |
-          VAL="${{ matrix.url }}"
-          [ -z "$VAL" ] && VAL="${{ matrix.path }}"
-          CLEAN=$(echo "$VAL" | sed 's|https://github.com/||' | sed 's|/|-|g' | sed 's|.git||')
-          echo "name=$CLEAN" >> $GITHUB_OUTPUT
+          cd workspace
+          TYPE="${{ matrix.dep.type }}"
+          URL="${{ matrix.dep.url }}"
+          
+          # Logica per gestire i vari tipi definiti nel JSON
+          case "$TYPE" in
+            git)
+              git clone --depth 1 $URL repo_$(echo $URL | sed 's|.*/||')
+              ;;
+            git-checkout)
+              git clone --depth 1 https://github.com/${{ github.event.inputs.src_repository }} repo_checkout
+              cd repo_checkout
+              git checkout ${{ matrix.dep.cmd }} || true
+              ;;
+            git-submodule)
+              git clone --depth 1 https://github.com/${{ github.event.inputs.src_repository }} repo_sub
+              cd repo_sub
+              git submodule update --init --recursive ${{ matrix.dep.path }} || true
+              ;;
+            apt|pip|cfg|zip|file|compile_maven)
+              echo "Tipo $TYPE rilevato. Creazione cartella segnaposto per Trivy..."
+              mkdir -p "data_$TYPE"
+              echo "$URL" > "data_$TYPE/info.txt"
+              ;;
+            *)
+              echo "Tipo non gestito: $TYPE"
+              ;;
+          esac
 
-      - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y git wget jq curl
-
-      
-      - name: Prepare Workspace
+      - name: Generate SBOM
         run: |
-          if [ "${{ matrix.type }}" == "git" ]; then
-            git clone --depth 1 ${{ matrix.url }} repo
-          else
-            # Per checkout/submodule, clona la repo principale
-            git clone --depth 1 https://github.com/${{ github.event.inputs.src_repository }} repo
-          fi
+          # Trivy scansiona tutto ciò che abbiamo messo nel workspace
+          trivy fs --format cyclonedx --output "sbom-result-${{ github.run_id }}.json" workspace/ || echo "TRIVY_FAILED=true" >> $GITHUB_ENV
 
-      - name: Apply git rules
-        run: |
-          cd repo
-          if [ "${{ matrix.type }}" == "git-checkout" ]; then
-            git fetch --all
-            git checkout ${{ matrix.cmd }}
-          elif [ "${{ matrix.type }}" == "git-submodule" ]; then
-            git submodule update --init --recursive ${{ matrix.path }}
-          fi
-
-      - name: Generate SBOM with Trivy
-        run: |
-          if [ ! -d "repo" ] || [ -z "$(ls -A repo)" ]; then
-            echo "Directory 'repo' is empty or missing!"
-            exit 1
-          fi
-          trivy fs \
-            --format cyclonedx \
-            --scanners vuln \
-            --output "${{ steps.repo.outputs.name }}.json" \
-            repo/ || echo "TRIVY_FAILED=true" >> $GITHUB_ENV
-
-      - name: Fallback if failed
-        if: env.TRIVY_FAILED == 'true'
-        run: |
-          echo '{"status":"failed","repo":"${{ matrix.url }}", "message": "Failed to generate SBOM"}' > "${{ steps.repo.outputs.name }}.json"
-
-      - name: Upload artifact
+      - name: Upload Artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: tmp-${{ steps.repo.outputs.name }}
-          path: ${{ steps.repo.outputs.name }}.json
+          name: sbom-${{ github.run_id }}-${{ matrix.dep.type }}
+          path: "*.json"
           retention-days: 1
 
-# ---------------------------------------------------
-# JOB 3 - MERGE FINAL SBOMS
-# ---------------------------------------------------
   merge-sboms:
     needs: trivy-analysis
     runs-on: ubuntu-latest
-
     steps:
-      - name: Create workspace
-        run: mkdir -p sboms
-
-      - name: Download artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
-          pattern: tmp-*
           path: sboms
+          pattern: sbom-${{ github.run_id }}-*
           merge-multiple: true
-
-      - name: Build final artifact
-        run: |
-          echo "Collected SBOMs:"
-          ls -R sboms
-
-      - name: Upload final SBOM bundle
-        if : always()
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: sbom-matrix-results
           path: sboms/*.json
-          retention-days: 1
