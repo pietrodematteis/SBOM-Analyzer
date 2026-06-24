@@ -47,7 +47,7 @@ st.markdown("---")
 # SELEZIONE INPUT DOCKER (generazione o upload SBOM esistente)
 # ============================================================
 docker_choice = st.radio(
-    "🐳 Origine Analisi Immagine Docker:",
+    "Origine Analisi Immagine Docker:",
     ["Genera SBOM Docker", "Carica SBOM Docker esistente (JSON)"],
     horizontal=False
 )
@@ -167,7 +167,7 @@ if st.session_state.sbom_ready:
         
         if st.button("📊 Genera Tabella di Confronto Base", use_container_width=True):
             
-            with st.spinner("Innesco pipeline e calcolo matrice in corso..."):
+            with st.spinner("Calcolo tabella in corso..."):
         
                 try:
         
@@ -444,16 +444,23 @@ if st.session_state.sbom_ready:
                         use_container_width=True
                     )
             
+  
             with st.expander(f"🟢 Pacchetti comuni tra Docker e Sorgente ({current_docker_report.get('packages_in_common_count', 0)})"):
-            
                 if current_docker_report.get("in_common"):
-            
-                    st.dataframe(pd.DataFrame(current_docker_report["in_common"]), use_container_width=True)
-            
+                   
+                    data = []
+                    for item in current_docker_report["in_common"]:
+                        sources = [f["source"] for f in item.get("source_files", [])]
+                        data.append({
+                            "Componente": item["name"],
+                            "Versione": item["version"],
+                            "File Sorgente": ", ".join(sources)
+                        })
+                    st.dataframe(pd.DataFrame(data), use_container_width=True)
                 else:
-            
                     st.info("Nessuna corrispondenza trovata.")
-
+            
+            
             with st.expander(f"🔴 Pacchetti solo dentro l'Immagine Docker ({current_docker_report.get('packages_only_in_docker_count', 0)})"):
                 st. info("Questa sezione mostra i pacchetti presenti solo nell'immagine Docker. Si noti che alcune dipendenze possono essere presenti più volte con versioni diverse all'interno dello SBOM Docker. Questo perchè potrebbero esserci dei residui di build.")
                
@@ -465,24 +472,21 @@ if st.session_state.sbom_ready:
             
                     st.info("Nessun pacchetto extra rilevato.")
             
-            with st.expander(f"⚠️ Pacchetti con Versioni Differenti (Docker vs Sorgenti) ({len(current_docker_report.get('version_mismatches', []))})"):
-                st. info("Questa sezione mostra le discrepanze di versione tra i pacchetti rilevati nell'immagine Docker e quelli presenti nei sorgenti della repository. Si noti che alcune dipendenze possono essere presenti con versioni diverse all'interno dello SBOM Docker. Questo perchè potrebbero esserci dei residui di build.")
+            with st.expander(f"⚠️ Pacchetti con Versioni Differenti ({len(current_docker_report.get('version_mismatches', []))})"):
                 mismatches = current_docker_report.get("version_mismatches", [])
-                
                 if mismatches:
-                    # Trasformiamo la lista di dizionari in un DataFrame leggibile
                     df_mismatch = pd.DataFrame([
                         {
                             "Componente": m["docker"]["name"],
                             "Versione Docker": m["docker"].get("version", "-"),
-                            "Versione altri SBOM": m.get("code_version", "-") 
+                            "Versione Sorgente": m.get("code_version", "-"),
+                            "File Sorgente": ", ".join([f["source"] for f in m.get("source_files", [])])
                         } for m in mismatches
                     ])
                     st.dataframe(df_mismatch, use_container_width=True)
-            
                 else:
                     st.info("Nessuna discrepanza di versione rilevata.")
-            
+                
             with st.expander(f"❌ Pacchetti Mancanti nel Docker SBOM ({len(current_docker_report.get('missing_in_docker', []))})"):
                 st. info("Questa sezione mostra le dipendenze che sono presenti nei sorgenti della repository ma non sono state rilevate nell'immagine Docker. Questo può indicare che alcune librerie non sono state incluse nella build dell'immagine.")
                 missing_in_docker = current_docker_report.get("missing_in_docker", [])

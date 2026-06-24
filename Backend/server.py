@@ -603,6 +603,7 @@ def generate_docker_sbom(docker_target: str, vuln_type: str = "os,library"):
     # Generazione dei grafi per la visualizzazione nel frontend
     docker_graph_results = generate_graphs_for_folder(STORAGE_DIR)
     
+    '''
     # Calcolo Cross-Reference immediato per aggiornare i KPI del Frontend
     # Recuperiamo le informazioni del codice precedentemente salvate in STORAGE_DIR
     def extract_identifiers(file_name):
@@ -643,8 +644,6 @@ def generate_docker_sbom(docker_target: str, vuln_type: str = "os,library"):
             # Usiamo walk solo dentro le cartelle che ci interessano
             for root, dirs, files in os.walk(folder):
                 for file_name in files:
-                    # 1. Deve essere un JSON
-                    # 2. Non deve essere tra quelli da ignorare
                     if file_name.endswith(".json") and file_name not in ignore_files:
                         file_path = os.path.join(root, file_name)
                         
@@ -656,7 +655,37 @@ def generate_docker_sbom(docker_target: str, vuln_type: str = "os,library"):
 
     # Recuperiamo tutti i nomi e PURL dei componenti del codice per il confronto
     all_code_names, all_code_purls = get_all_code_identifiers()
-
+    '''
+    
+    def get_global_code_map():
+        #Restituisce: { purl: [ {file: 'nomefile.json', name: '...', version: '...'}, ... ] }
+        global_map = {}
+        target_dirs = [os.path.join(STORAGE_DIR, "manifests"), os.path.join(STORAGE_DIR, "dependencies")]
+        ignore_files = {"docker_sbom.json", "cyclonedx-vuln-SBOM.json", "cyclonedx-license-SBOM.json"}
+        
+        for folder in target_dirs:
+            if os.path.exists(folder):
+                for root, _, files in os.walk(folder):
+                    for file_name in files:
+                        if file_name.endswith(".json") and file_name not in ignore_files:
+                            with open(os.path.join(root, file_name), "r", encoding="utf-8") as f:
+                                data = json.load(f)
+                                items = data.get("components", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
+                                for c in items:
+                                    if isinstance(c, dict) and c.get("purl"):
+                                        purl = str(c["purl"]).lower().strip()
+                                        if purl not in global_map: global_map[purl] = []
+                                        global_map[purl].append({
+                                            "source": file_name,
+                                            "name": c.get("name"),
+                                            "version": c.get("version")
+                                        })
+        return global_map
+    
+    # Recuperiamo la mappa globale dei componenti del codice per il confronto con lo SBOM Docker
+    code_map = get_global_code_map()
+    all_code_purls = set(code_map.keys())
+    
     # Carichiamo i componenti appena scaricati dal Docker
     docker_components = []
     try:
@@ -686,39 +715,44 @@ def generate_docker_sbom(docker_target: str, vuln_type: str = "os,library"):
             name = parts[0].split("/")[-1].lower().strip()
             code_version_map[name] = version
     
-    all_code_names_only = {name.split('@')[0].lower().strip() for name in all_code_names}
+    all_code_names_only = {entry["name"].lower().strip() for entries in code_map.values() for entry in entries if entry.get("name")}
     
     # CONFRONTO OTTIMIZZATO
     for dc in docker_components:
         dc_name_clean = dc["name"].lower().strip()
         dc_purl_clean = dc["purl"].lower().strip() if dc["purl"] else ""
         match_found = False
+        matched_purl = None
         
         # se il PURL è disponibile, usiamolo per un confronto più preciso (inclusi versioni e parametri)
         if dc_purl_clean:
-            
-            if dc_purl_clean in all_code_purls: # se il PURL completo corrisponde, è un match diretto
+            if dc_purl_clean in all_code_purls:
                 match_found = True
-            
-            else: # se non c'è un match diretto, facciamo un controllo flessibile per vedere se il PURL del Docker è contenuto in uno dei PURL del codice o viceversa (per gestire versioni o parametri aggiuntivi)
+                matched_purl = dc_purl_clean
+            else:
                 for cp in all_code_purls:
-                    if dc_purl_clean in cp or cp in dc_purl_clean: # Controllo flessibile per versioni o parametri aggiuntivi
+                    if dc_purl_clean in cp or cp in dc_purl_clean:
                         match_found = True
+                        matched_purl = cp
                         break
-        #else:
-            # Se non abbiamo un PURL, facciamo un confronto basato solo sul nome (meno preciso ma utile come fallback)
-         #   if dc_name_clean in all_code_names:
-          #      match_found = True
-
+        
+        
         if match_found:
+            dc["source_files"] = code_map.get(matched_purl, [])
             in_common.append(dc)
         else:
             if dc_name_clean in all_code_names_only:
+                source_details = []
+                for entries in code_map.values():
+                    for e in entries:
+                        if e.get("name", "").lower().strip() == dc_name_clean:
+                            source_details.append(e)
+                
                 version_mismatches.append({
                     "docker": dc,
-                    "code_version": code_version_map.get(dc_name_clean, "Versione non trovata")
+                    "code_version": code_version_map.get(dc_name_clean, "Versione non trovata"),
+                    "source_files": source_details
                 })
-
             else:
                 only_in_docker.append(dc)
                 
@@ -730,51 +764,22 @@ def generate_docker_sbom(docker_target: str, vuln_type: str = "os,library"):
     # elementi unici 
     docker_components_unique = {f"{c['name'].lower().strip()}@{c['version']}": c for c in docker_components}.values()
     docker_components_unique_names = {c['name'].lower().strip() for c in docker_components_unique}
-    print(f"[DEBUG] Totale componenti unici nel Docker SBOM: {len(docker_components_unique)}", flush=True)
-    print(f"[DEBUG] Totale nomi unici nel Docker SBOM: {len(docker_components_unique_names)}", flush=True)
+    print(f"[DEBUG] Totale componenti unici nel Docker SBOM (nome + versione): {len(docker_components_unique)}", flush=True)
+    print(f"[DEBUG] Totale nomi unici nel Docker SBOM (solo nomi): {len(docker_components_unique_names)}", flush=True)
     
-    # Recuperiamo tutti i nomi e PURL (la tua logica esistente)
-    all_code_names, all_code_purls = get_all_code_identifiers()
-
     # --- Analisi separata per le dipendenze che ci sono nel sorgente ma non nel docker SBOM ---
-    missing_raw = [] # Lista di componenti mancanti nel Docker SBOM
-    target_dirs = [os.path.join(STORAGE_DIR, "manifests"), os.path.join(STORAGE_DIR, "dependencies")] # Cartelle da scansionare per i file JSON generati
-    
-    
     docker_purl_set = {dc["purl"].lower().strip() for dc in docker_components if dc.get("purl")}
-    
-    for folder in target_dirs:
-        if os.path.exists(folder):
-            for root, _, files in os.walk(folder):
-                for file_name in files:
-                    if file_name.endswith(".json") and file_name not in {"docker_sbom.json", "cyclonedx-vuln-SBOM.json", "cyclonedx-license-SBOM.json"}:
-                        with open(os.path.join(root, file_name), "r", encoding="utf-8") as f:
-                            data = json.load(f)
-                            items = data.get("components", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
-                            for c in items:
-                                if isinstance(c, dict) and c.get("purl"):
-                                    purl = str(c["purl"]).lower().strip()
-                                    if purl not in docker_purl_set:
-                                        missing_raw.append({
-                                            "name": c.get("name"),
-                                            "version": c.get("version"),
-                                            "purl": purl,
-                                            "source": file_name
-                                        })
-    
-    # Raggruppamento finale per il report
-    final_missing = {}
-    for item in missing_raw:
-        key = f"{item['name']}@{item['version']}"
-        if key not in final_missing:
-            final_missing[key] = {**item, "files": [item["source"]]}
-        elif item["source"] not in final_missing[key]["files"]:
-            final_missing[key]["files"].append(item["source"])
-    
-    missing_in_docker = list(final_missing.values())
-    # ------------------------------------------------------------------
-    
+    missing_in_docker = []
 
+    for purl, entries in code_map.items():
+        if purl not in docker_purl_set:
+            missing_in_docker.append({
+                "name": entries[0]["name"],
+                "version": entries[0]["version"],
+                "purl": purl,
+                "files": list({e["source"] for e in entries})
+            })
+    
     docker_report = {
         "total_docker_packages": len(docker_components),
         "packages_in_common_count": len(in_common),
