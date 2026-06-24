@@ -33,11 +33,19 @@ jobs:
 
       - name: Build dependency matrix
         id: set-matrix
-        run: | 
-          jq -c '[.[] | select(.type == "git" or .type == "git-checkout" or .type == "git-submodule")]' \  
-            ${{ github.event.inputs.path_dipendenze }} > deps.json
+        run: |
+          FILE="${{ github.event.inputs.path_dipendenze }}"
 
-          MATRIX=$(jq -c '.' deps.json)
+          echo "Using dependency file: $FILE"
+
+          if [ ! -f "$FILE" ]; then
+            echo "ERROR: file not found -> $FILE"
+            exit 1
+          fi
+
+          MATRIX=$(jq -c '[.[] | select(.type == "git" or .type == "git-checkout" or .type == "git-submodule")]' "$FILE")
+
+          echo "Matrix: $MATRIX"
 
           if [ "$MATRIX" = "[]" ] || [ -z "$MATRIX" ]; then
             echo "No valid git dependencies found"
@@ -45,7 +53,6 @@ jobs:
           fi
 
           echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
-
 
 # ---------------------------------------------------
 # JOB 2 - ANALISI PARALLELA
