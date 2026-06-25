@@ -40,7 +40,67 @@ st.subheader("1. Configurazione Target & SBOM di Base")
 
 repo_url = st.text_input("GitHub Repository URL", value=st.session_state.saved_repo, placeholder="https://github.com/owner/repo")
 branch = st.text_input("Branch", value=st.session_state.saved_branch)
-st.info("⚡ Inserisci la URL della repository GitHub e il branch da analizzare.")
+st.info(" Inserisci la URL della repository GitHub e il branch da analizzare.")
+st.markdown("---")
+
+# ============================================================
+# SELEZIONE MODALITÀ DI ANALISI (Dockerfile o Manuale)
+# ============================================================
+
+mode = st.radio(
+    "Come vuoi analizzare le dipendenze statiche?",
+    ["Analisi tramite Dockerfile", "Analisi Manuale (Poetry/Requirements)"]
+)
+
+dockerfile_path = ""
+manual_files = []
+
+if mode == "Analisi tramite Dockerfile":
+    
+    # ===============================================================
+    # SBOM DINAMICO (analisi tramite Dockerfile)
+    # ==============================================================
+    
+    dockerfile_path = st.text_input("Percorso del Dockerfile nella repo", value="Dockerfile")
+    st.info(f"Il tool analizzerà il file {dockerfile_path} per scoprire le dipendenze.")
+    
+elif mode == "Analisi Manuale (Poetry/Requirements)":
+    
+    # ============================================================
+    # SBOM STATICO (generazione o upload)
+    # ============================================================
+
+    sbom_choice = st.radio(
+        "Scegli l'origine dello SBOM di base:",
+        ["Genera SBOM Statico da zero", "Carica file SBOM esistenti"],
+        horizontal=True
+    )
+
+    requirements_file = None
+    poetry_file = None
+
+    if sbom_choice == "Carica file SBOM esistenti":
+        # Se l'utente sceglie di caricare file SBOM esistenti, mostriamo due file uploader affiancati per i formati requirements e poetry
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            requirements_file = st.file_uploader("Carica JSON Requirements", type=["json"])
+        with col2:
+            poetry_file = st.file_uploader("Carica JSON Poetry", type=["json"])
+            
+    elif sbom_choice == "Genera SBOM Statico da zero":
+        # Se l'utente sceglie di generare lo SBOM da zero, mostriamo un selectbox per scegliere il formato da generare tramite la pipeline
+        
+        format_type = st.selectbox(
+            "Seleziona il formato da generare tramite la pipeline:",
+            options=["entrambi", "requirements", "poetry"],
+            format_func=lambda x: x.capitalize()
+        )
+        
+        st.session_state.saved_format = format_type
+
+
+
 st.markdown("---")
 
 # ============================================================
@@ -81,66 +141,41 @@ elif docker_choice == "Genera SBOM Docker":
     
     index=0  # Default su tutto
 )
-    st.info("⚡ Verrà inviato questo target alla pipeline remota di GitHub Actions.")
+    st.info(" Verrà inviato questo target alla pipeline remota di GitHub Actions.")
 
-st.markdown("---")
 
-# ============================================================
-# SBOM STATICO (generazione o upload)
-# ============================================================
-
-sbom_choice = st.radio(
-    "Scegli l'origine dello SBOM di base:",
-    ["Genera SBOM Statico da zero", "Carica file SBOM esistenti"],
-    horizontal=True
-)
-
-requirements_file = None
-poetry_file = None
-
-if sbom_choice == "Carica file SBOM esistenti":
-    # Se l'utente sceglie di caricare file SBOM esistenti, mostriamo due file uploader affiancati per i formati requirements e poetry
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        requirements_file = st.file_uploader("Carica JSON Requirements", type=["json"])
-    with col2:
-        poetry_file = st.file_uploader("Carica JSON Poetry", type=["json"])
-        
-elif sbom_choice == "Genera SBOM Statico da zero":
-    # Se l'utente sceglie di generare lo SBOM da zero, mostriamo un selectbox per scegliere il formato da generare tramite la pipeline
-    
-    format_type = st.selectbox(
-        "Seleziona il formato da generare tramite la pipeline:",
-        options=["entrambi", "requirements", "poetry"],
-        format_func=lambda x: x.capitalize()
-    )
-    
-    st.session_state.saved_format = format_type
-
-if st.button("🔄 Invia e Mantieni in Memoria sul Server"):
+if st.button("🔄 Invia e Avvia Discovery"):
     if not repo_url:
         st.error("Inserisci la URL della repo.")
         st.stop()
         
     st.session_state.saved_repo = repo_url
     st.session_state.saved_branch = branch
-    st.session_state.docker_analyzed = False  # Resetta lo stato se cambiano i file target
+    st.session_state.docker_analyzed = False
 
-    with st.spinner("Salvataggio file sul server..."):
+    data_payload = {
+        "action": "generate", 
+        "mode": "docker" if mode == "Analisi tramite Dockerfile" else "manual",
+        "dockerfile_path": dockerfile_path if mode == "Analisi tramite Dockerfile" else None,
+        "manual_format": st.session_state.get("saved_format") if mode != "Analisi tramite Dockerfile" else None
+    }
+    
+    files_payload = {}
+    # Carichiamo i file solo se siamo in modalità manuale e l'utente ha scelto di caricarli
+    if mode == "Analisi Manuale (Poetry/Requirements)" and sbom_choice == "Carica file SBOM esistenti":
+        if requirements_file: files_payload["requirements_file"] = requirements_file.getvalue()
+        if poetry_file: files_payload["poetry_file"] = poetry_file.getvalue()
+    
+    if docker_choice == "Carica SBOM Docker esistente (JSON)" and docker_file:
+        files_payload["docker_file"] = docker_file.getvalue()
+
+    # Invio al backend
+    with st.spinner("Configurazione analisi in corso..."):
         try:
-            data_payload = {"action": "generate" if sbom_choice == "Genera SBOM Statico da zero" else "upload"}
-            files_payload = {}
-            
-            if requirements_file: files_payload["requirements_file"] = requirements_file.getvalue()
-            if poetry_file: files_payload["poetry_file"] = poetry_file.getvalue()
-            if docker_file: files_payload["docker_file"] = docker_file.getvalue() 
-            
             res = requests.post(f"{BACKEND_URL}/upload-sbom", data=data_payload, files=files_payload)
-                
             if res.status_code == 200:
                 st.session_state.sbom_ready = True
-                st.success(res.json().get("message"))
+                st.success("Configurazione accettata: il backend sta preparando lo SBOM.")
                 st.rerun()
             else:
                 st.error(f"Errore server: {res.text}")
