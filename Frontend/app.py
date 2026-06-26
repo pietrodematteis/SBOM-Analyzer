@@ -316,9 +316,6 @@ if st.session_state.analysis_results is not None:
     git_repos = [item["url"] for item in dependencies if item.get("url") and "github.com" in item["url"]]
     component_type = result.get("component_type", None)
     
-
-    st.markdown("---")
-    
     # ============================================================
     # TABELLONE DINAMICO DI CONFRONTO (con possibilità di download dei singoli SBOM riga per riga)
     # ============================================================    
@@ -524,7 +521,7 @@ if st.session_state.analysis_results is not None:
                     data.append({
                         "Componente": item["name"],
                         "Versione": item["version"],
-                        "File Sorgente": ", ".join(sources)
+                        "File Sorgente (oltre a immagine docker)": ", ".join(sources)
                     })
                 st.dataframe(pd.DataFrame(data), use_container_width=True)
             else:
@@ -568,7 +565,7 @@ if st.session_state.analysis_results is not None:
                         "Componente": m.get("name", "-"),
                         "Versione Sorgente": m.get("version", "-"),
                         "PURL": m.get("purl", "-"),
-                        "File Sorgente": ", ".join(m.get("files", []))
+                        "File Sorgente (oltre a immagine docker)": ", ".join(m.get("files", []))
                     } for m in missing_in_docker
                 ])
                 st.dataframe(df_missing, use_container_width=True)
