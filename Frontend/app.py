@@ -470,12 +470,13 @@ if st.session_state.analysis_results is not None:
         
         st.markdown("#### 📊 Statistiche e Deviazioni dell'Immagine Docker")
         
-        kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5)
+        kpi1, kpi2, kpi3, kpi4, kpi5, kpi6 = st.columns(6)
         kpi1.metric("Totale Pacchetti nel Docker", current_docker_report.get("total_docker_packages", 0))
-        kpi2.metric("✅ In Comune con i Sorgenti", current_docker_report.get("packages_in_common_count", 0))
-        kpi3.metric("⚠️ Esclusivi Docker", current_docker_report.get("packages_only_in_docker_count", 0))
-        kpi4.metric("❗ Versioni Differenti (Tra Docker e Sorgenti)", current_docker_report.get("packages_with_version_mismatches_count", 0))
-        kpi5.metric("❌ Mancanti nel Docker", current_docker_report.get("packages_missing_in_docker_count", 0))
+        kpi2.metric("Totale Pacchetti Unici nel Docker", current_docker_report.get("total_unique_docker_packages", 0))
+        kpi3.metric("✅ In Comune con i Sorgenti", current_docker_report.get("packages_in_common_count", 0))
+        kpi4.metric("⚠️ Esclusivi Docker", current_docker_report.get("packages_only_in_docker_count", 0))
+        kpi5.metric("❗ Versioni Differenti (Tra Docker e Sorgenti)", current_docker_report.get("packages_with_version_mismatches_count", 0))
+        kpi6.metric("❌ Mancanti nel Docker", current_docker_report.get("packages_missing_in_docker_count", 0))
 
         raw_docker_sbom = current_results.get("raw_docker_sbom", "")
 
