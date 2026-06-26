@@ -9,7 +9,10 @@ import tempfile
 import shutil
 import time
 import zipfile
+import traceback
 from typing import Optional
+from dockerfile_parse import DockerfileParser
+import stat
 
 # ============================================================
 # CONFIGURAZIONE INIZIALE E VARIABILI GLOBALI
@@ -292,6 +295,13 @@ def trigger_github_action(workflow_file: str, inputs: dict) -> Optional[dict]:
             
     return None
 
+# ============================================================
+# Gestore per rimuovere file in sola lettura durante la pulizia della cartella di storage
+# ============================================================
+    
+def remove_readonly(func, path, excinfo):
+    os.chmod(path, stat.S_IWRITE)
+    func(path)
 
 # ============================================================
 # ACQUISIZIONE E SALVATAGGIO IN MEMORIA SERVER di file JSON manuali o generati
@@ -300,14 +310,51 @@ def trigger_github_action(workflow_file: str, inputs: dict) -> Optional[dict]:
 @app.post("/upload-sbom")
 async def upload_sbom(
     action: str = Form(...),
+    mode: str = Form("manual"), # Default manuale
+    dockerfile_path: Optional[str] = Form(None),
+    repo_url: Optional[str] = Form(None), # Necessario per clonare
+    branch: Optional[str] = Form(None), # Necessario per clonare
     requirements_file: Optional[UploadFile] = File(None),
     poetry_file: Optional[UploadFile] = File(None),
-    docker_file: Optional[UploadFile] = File(None), 
+    docker_file: Optional[UploadFile] = File(None),
 ):
+    # pulizia della cartella di storage per evitare conflitti con file precedenti
     if os.path.exists(STORAGE_DIR):
-        shutil.rmtree(STORAGE_DIR)
+        shutil.rmtree(STORAGE_DIR, onerror=remove_readonly)
     os.makedirs(STORAGE_DIR, exist_ok=True)
-
+    
+    # Se il mode è "docker", eseguiamo il discovery automatico dei file di dipendenze dal Dockerfile
+    if mode == "docker":
+        if not repo_url:
+            raise HTTPException(400, "URL repository mancante per il discovery.")
+            
+        tmp_clone = tempfile.mkdtemp()
+        try:
+            subprocess.run(["git", "clone", "--depth", "1", "--branch", branch, repo_url, tmp_clone], check=True)
+            
+            # Parsing dei file
+            found_files = []
+            valid_patterns = ["requirements.txt", "pyproject.toml", "poetry.lock", "dependencies.json", "package.json"]
+            
+            for root, _, files in os.walk(tmp_clone):
+                for f in files:
+                    if f in valid_patterns:
+                        file_path = os.path.join(root, f)
+                        dest_path = os.path.join(STORAGE_DIR, f)
+                        shutil.copy(file_path, dest_path)
+                        found_files.append(f)
+            
+            if not found_files:
+                raise HTTPException(400, "Nessun file di dipendenze rilevato.")
+            
+            with open(os.path.join(STORAGE_DIR, "discovered_files.json"), "w") as f:
+                json.dump(found_files, f)
+            
+            return {"status": "success", "files": found_files}
+            
+        finally:
+            shutil.rmtree(tmp_clone, onerror=remove_readonly)
+            
     # Se l'azione è "upload", salviamo tutti i file manuali caricati (requirements, poetry, docker) per l'analisi comparativa
     if action == "upload":
         if not requirements_file and not poetry_file and not docker_file:
@@ -334,49 +381,140 @@ async def upload_sbom(
                 f.write(await docker_file.read())
         return {"status": "success", "message": "Pronto per l'attivazione della pipeline di generazione remota."}
 
-
 # ============================================================
-# ANALISI COMPARATIVA INTEGRATA per il file dependencies.json del repository Git
+# Recupero dei file scoperti durante la fase di discovery per visualizzazione nel frontend
 # ============================================================
 
-@app.post("/compare-dependencies")
-def compare_dependencies(repo_url: str, branch: str, path_dipendenze: str, format: str = "entrambi"):
-    tmp_clone = tempfile.mkdtemp()
+@app.get("/get-discovered-files")
+def get_discovered_files():
+
+    path = os.path.join(STORAGE_DIR, "discovered_files.json")
+    
+    if not os.path.exists(path):
+        # Se non esiste ancora, ritorniamo una lista vuota o un errore
+        return []
+    
     try:
-        github_run_url = None
-        
-        print("[BACKEND] Avvio trigger_github_action per analisi codice base...", flush=True)
-        print(f"[DEBUG] Parametri comparativi: repo_url={repo_url}, branch={branch}, path_dipendenze={path_dipendenze}, format={format}", flush=True)
-        
-        match = re.search(r"github\.com/([^/]+)/([^/?#]+)", repo_url)
-        owner_repo = f"{match.group(1)}/{match.group(2).replace('.git', '')}" if match else repo_url
+        with open(path, "r") as f:
+            data = json.load(f)
+            return data
+    except Exception as e:
+        # In caso di errore di lettura, restituiamo un errore gestibile
+        raise HTTPException(status_code=500, detail=f"Errore nella lettura dei file trovati: {str(e)}")
 
-        if format != "manual_only":
-            old_inputs = {
-                "src_repository": owner_repo,
-                "src_branch": branch,
-                "format": format
-            }
-            
-            action_info = trigger_github_action("sbom_static.yml", old_inputs)
-            print(f"DEBUG: Risultato trigger_github_action -> {action_info}", flush=True)
-            if action_info:
-                github_run_url = action_info["html_url"]
-                wait_and_download_artifacts(action_info["id"], STORAGE_DIR)
+# ============================================================
+# ANALISI SPECIFICA DI UN SINGOLO FILE TROVATO NEL DOCKERFILE
+# ============================================================
+@app.post("/analyze-standard-file")
+async def analyze_standard_file(
+    format: str = Form(...), 
+    repo_url: str = Form(...),
+    branch: str = Form(...)
+):
+    # Logica per gestire "Entrambi"
+    print (f"[BACKEND] Analisi standard per formato: {format}, repo: {repo_url}, branch: {branch}", flush=True)
+    files_da_analizzare = []
+    if format == "Entrambi":
+        files_da_analizzare = ["requirements", "poetry"] # Aggiungi quelli che vuoi
+    else:
+        if format not in ["requirements", "poetry", "pyproject.toml", "poetry.lock"]:
+            raise HTTPException(status_code=400, detail="Formato non supportato per l'analisi standard.")
+        elif format == "requirements.txt":
+            files_da_analizzare = ["requirements"]
+        elif format == "pyproject.toml" or format == "poetry.lock":
+            files_da_analizzare = ["poetry"]
 
-        # Clone leggero del repository per estrarre il file dipendenze custom
+    results = []
+    
+    # Eseguiamo l'analisi per ogni file richiesto
+    for f_name in files_da_analizzare:
+        try:
+            # Chiamiamo la funzione che esegue la Action e scarica l'artefatto
+            risultato = run_standard_sbom_action(repo_url, branch, f_name)
+            results.append(risultato)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Errore durante l'analisi di {f_name}: {str(e)}")
+
+    # Ritorna la lista dei risultati
+    return {"status": "success", "data": results, "type": "standard"}
+
+# ============================================================
+# FUNZIONE DI SUPPORTO
+# ============================================================
+
+def run_standard_sbom_action(repo_url, branch, format):
+    
+    match = re.search(r"github\.com/([^/]+)/([^/?#]+)", repo_url)
+    owner_repo = f"{match.group(1)}/{match.group(2).replace('.git', '')}" if match else repo_url
+
+    inputs = {
+        "src_repository": owner_repo,
+        "src_branch": branch,
+        "format": format
+    }
+
+    action_info = trigger_github_action("sbom_static.yml", inputs)
+    
+    if not action_info:
+        raise HTTPException(status_code=500, detail="Il trigger della GitHub Action è fallito.")
+
+    # Scarica artefatti
+    wait_and_download_artifacts(action_info["id"], STORAGE_DIR)
+
+    # Mappatura file
+    mapping = {
+        "requirements": "trivy_requirements.json",
+        "poetry": "trivy_poetry.json",
+        "pyproject": "trivy_pyproject.json"
+    }
+
+    if format not in mapping:
+        raise HTTPException(status_code=400, detail="File di dipendenze non supportato")
+        
+    target_file = os.path.join(STORAGE_DIR, "manifests", mapping[format])
+
+    if not os.path.exists(target_file):
+        raise HTTPException(status_code=404, detail="File SBOM non trovato dopo la scansione.")
+
+    # Leggiamo il JSON per passarlo al frontend
+    with open(target_file, "r", encoding="utf-8") as f:
+        content = json.load(f)
+
+    return {
+        "file_name": format,
+        "target_file": target_file,
+        "github_run_url": action_info["html_url"],
+        "content": content
+    }
+
+# ============================================================
+# LOGICA 2: ANALISI AVANZATA (Solo per dependencies.json)
+# ============================================================
+@app.post("/analyze-custom-file")
+def analyze_custom_file(
+    repo_url: str = Form(...), 
+    branch: str = Form(...), 
+    path_file: str = Form(...)
+):
+    tmp_clone = tempfile.mkdtemp() # Creiamo una cartella temporanea per il clone del repository
+    
+    try:
+        print(f"[BACKEND] Modalità Avanzata: Parsing e Action per {path_file}", flush=True)
+    
+    
+    # Clone leggero del repository per estrarre il file dipendenze custom
         subprocess.run([
             "git", "clone", "--depth", "1", "--branch", branch, repo_url, tmp_clone
         ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
         target_file = None
         for root, _, files in os.walk(tmp_clone):
-            if path_dipendenze in files:
-                target_file = os.path.join(root, path_dipendenze)
+            if path_file in files:
+                target_file = os.path.join(root, path_file)
                 break
 
         if not target_file:
-            raise HTTPException(404, f"File '{path_dipendenze}' non trovato nella repository.")
+            raise HTTPException(404, f"File '{path_file}' non trovato nella repository.")
 
         with open(target_file, "r", encoding="utf-8") as f:
             dependencies = json.load(f)
@@ -448,25 +586,6 @@ def compare_dependencies(repo_url: str, branch: str, path_dipendenze: str, forma
                 "present_in_poetry": is_in_poetry
             })
 
-        def read_raw_file(file_name):
-            file_path = os.path.join(STORAGE_DIR, file_name)
-            if os.path.exists(file_path):
-                try:
-                    with open(file_path, "r", encoding="utf-8") as f:
-                        return f.read()
-                except Exception:
-                    return None
-            return None
-
-        raw_requirements = read_raw_file(os.path.join("manifests", "trivy_requirements.json"))
-        raw_poetry = read_raw_file(os.path.join("manifests", "trivy_poetry.json"))
-
-        simulated_matrix = (
-            f"=== REPORT REALE PIPELINE ACTIONS ===\n"
-            f"Componenti estratti dal file statico/manuale: {len(extracted_data)}\n"
-            f"Trovati in Trivy (Requirements): {len([e for e in extracted_data if e['present_in_requirements'] == '✅'])}\n"
-            f"Trovati in Trivy (Poetry): {len([e for e in extracted_data if e['present_in_poetry'] == '✅'])}\n"
-        )
 
         return {
             "status": "success",
@@ -474,11 +593,7 @@ def compare_dependencies(repo_url: str, branch: str, path_dipendenze: str, forma
             "branch": branch,
             "count": len(extracted_data),
             "result": extracted_data,
-            "detected_git_repos": list(set(repos)),
-            "github_run_url": github_run_url,
-            "comparison_matrix": simulated_matrix,
-            "raw_requirements": raw_requirements,
-            "raw_poetry": raw_poetry
+            "detected_git_repos": list(set(repos))
         }
 
     except Exception as e:
@@ -486,16 +601,23 @@ def compare_dependencies(repo_url: str, branch: str, path_dipendenze: str, forma
         raise HTTPException(500, f"Errore interno del server: {str(e)}")
     finally:
         shutil.rmtree(tmp_clone, ignore_errors=True)
-
+        
+# ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+# IN CASO MODIFICARE QUESTA FUNZIONE PER AGGIUNGERE NUOVI TIPI DI FILE O FORMATI DI DIPENDENZE
+# ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 # ============================================================
 # ANALISI COMPONENTI DEPENDENCIES.JSON IN PARALLELO (con github action remota) e generazione SBOM per singole dipendenze
 # ============================================================
 
 @app.post("/analyze-dependencies-sbom")
-def analyze_dependencies_sbom(repo_url: str, branch: str, path_dipendenze: str = "dependencies.json"):
+def analyze_dependencies_sbom(
+    repo_url: str = Form(...), 
+    branch: str = Form(...), 
+    path_file: str = Form(...)
+):
     workflow_name = "dynamic_sbom.yml"
     print(f"[BACKEND] Avvio pipeline avanzata per singole dipendenze...", flush=True)
-    print(f"[DEBUG] Parametri analisi dipendenze: repo_url={repo_url}, branch={branch}, path_dipendenze={path_dipendenze}", flush=True)
+    print(f"[DEBUG] Parametri analisi dipendenze: repo_url={repo_url}, branch={branch}, path_dipendenze={path_file}", flush=True)
     
     match = re.search(r"github\.com/([^/]+)/([^/?#]+)", repo_url)
     owner_repo = f"{match.group(1)}/{match.group(2).replace('.git', '')}" if match else repo_url
@@ -503,7 +625,7 @@ def analyze_dependencies_sbom(repo_url: str, branch: str, path_dipendenze: str =
     inputs = {
         "src_repository": owner_repo,
         "src_branch": branch,
-        "path_dipendenze": path_dipendenze
+        "path_dipendenze": path_file
     }
     run_info = trigger_github_action(workflow_name, inputs)
     
@@ -556,7 +678,11 @@ def analyze_dependencies_sbom(repo_url: str, branch: str, path_dipendenze: str =
         "sboms": generated_sboms,
         "graphs": graph_results
     }
- 
+
+# ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+# IN CASO MODIFICARE QUESTA FUNZIONE PER AGGIUNGERE NUOVI TIPI DI FILE O FORMATI DI DIPENDENZE
+# ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
 # ============================================================
 # GENERAZIONE SBOM DOCKER REMOTA e ANALISI COMPARATIVA IMMEDIATA
 # ============================================================
