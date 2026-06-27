@@ -409,7 +409,11 @@ if st.session_state.analysis_results is not None:
         
                         if "graphs" in response_data:
         
-                            st.session_state["docker_results"] = {"graphs": response_data["graphs"]}
+                            st.session_state["docker_results"]["graphs"] = response_data["graphs"]
+                        
+                        if "hierarchy_with_weights" in response_data:
+        
+                            st.session_state["docker_results"]["hierarchy_with_weights"] = response_data["hierarchy_with_weights"]
                         
                         if "docker_report" in response_data:
         
@@ -600,8 +604,9 @@ if st.session_state.analysis_results is not None:
         # Unione dei grafi che arrivano da analisi diverse (Repo o Docker)
         repo_graphs = st.session_state.get("deep_sbom_results", {}).get("graphs", {})
         docker_graphs = st.session_state.get("docker_results", {}).get("graphs", {})
+        hierarchy_with_weights = st.session_state.get("docker_results", {}).get("hierarchy_with_weights", {})
         
-        
+        print(f"[FRONTEND] return: {st.session_state.get('docker_results', {})}", flush=True) 
         normalized_docker_graphs = {}
         for purl, deps in docker_graphs.items():
             # normalizzazone dei nodi e archi per il grafo Docker
@@ -625,7 +630,8 @@ if st.session_state.analysis_results is not None:
                 modalita = st.radio("Layout:", ["Grafo Libero", "Albero Gerarchico"], horizontal=True)
         
             graph_data = all_graphs[file_selezionato]
-            
+          
+         
             # Creazione nodi e archi
             nodes = [Node(id=n["id"], label=n["label"], size=15) for n in graph_data["nodes"]]
             edges = [Edge(source=e["source"], target=e["target"]) for e in graph_data["edges"]]
@@ -643,10 +649,42 @@ if st.session_state.analysis_results is not None:
             )
             
             agraph(nodes=nodes, edges=edges, config=config)
+
+            print(f"[FRONTEND] Visualizzazione grafo per {file_selezionato} con {len(nodes)} nodi e {len(edges)} archi.", flush=True)
+            print (f"[FRONTEND] hierarchy_with_weights: {hierarchy_with_weights}", flush=True)
+            
+            if file_selezionato == "Docker_SBOM" and hierarchy_with_weights:
+                st.divider()
+                st.subheader("📊 Analisi Impatto Dipendenze")
+                
+                with st.expander("Analisi del peso delle dipendenze"):
+                    # Preparazione dati per la tabella
+                    impact_data = [
+                        {
+                            "Pacchetto": purl.split('/')[-1].split('@')[0], 
+                            "Peso (Dipendenze Totali)": data.get("weight", 0)
+                        } 
+                        for purl, data in hierarchy_with_weights.items()
+                    ]
+                    
+                    
+                    df = pd.DataFrame(impact_data)
+                    
+                    df_filtered = df[df["Peso (Dipendenze Totali)"] > 0].sort_values(by="Peso (Dipendenze Totali)", ascending=False)
+                    
+                    # Usiamo una visualizzazione a barre colorata
+                    st.bar_chart(df_filtered.set_index("Pacchetto"))
+                    
+                    # Tabella dettagliata
+                    st.dataframe(df_filtered, use_container_width=True)
+            
+                
+                    st.info("💡 Il 'peso' indica quante dipendenze (dirette e indirette) ogni pacchetto trascina con sé.")
         
         else:
         
             st.info("Esegui un'analisi (Repo o Docker) per generare i grafi.")
+        
     # ============================================================
     # TAB DI TRASPARENZA IN CODA (LOGS E FILE COMPLETI)
     # ============================================================
@@ -668,5 +706,3 @@ if st.session_state.analysis_results is not None:
         
         else: st.info("Nessuna repository GitHub mappata.")
     current_tab_idx += 1
-
-

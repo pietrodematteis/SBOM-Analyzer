@@ -256,6 +256,25 @@ def build_universal_hierarchy(name_sbom_file_docker: str, folder_path: str):
     return hierarchy
 
 # ============================================================
+# FUNZIONE DI SUPPORTO PER CALCOLARE IL PESO DI UNA DIPENDENZA (numero totale di dipendenze dirette e indirette)
+# ============================================================
+
+def get_dependency_weight(purl, hierarchy, memo=None):
+    if memo is None: memo = {} # memo è un dizionario per memorizzare i risultati già calcolati
+    if purl in memo: return memo[purl] # Se il peso è già stato calcolato, ritorna il valore memorizzato
+    
+    # Prendi le dipendenze dirette
+    children = hierarchy.get(purl, [])
+    total = len(children)
+    
+    # Somma ricorsivamente le dipendenze dei figli
+    for child in children:
+        total += get_dependency_weight(child, hierarchy, memo)
+        
+    memo[purl] = total
+    return total
+
+# ============================================================
 # LOGICA DI POLLING E SCARICAMENTO ARTIFACT
 # ============================================================
 
@@ -817,6 +836,19 @@ def generate_docker_sbom(docker_target: str, vuln_type: str = "os,library"):
     # Generazione dei grafi per la visualizzazione nel frontend
     docker_graph_results = build_universal_hierarchy("docker_sbom.json", STORAGE_DIR)
     
+    # calcolo per il peso di ogni dipendenza nel grafo
+    memo = {}
+    hierarchy_with_weights = {}
+    
+    for purl in docker_graph_results:
+        weight = get_dependency_weight(purl, docker_graph_results, memo)
+        hierarchy_with_weights[purl] = {
+            "dependencies": docker_graph_results[purl],
+            "weight": weight
+        }
+    
+    print(f"[BACKEND] hierarchy_with_weights: {json.dumps(hierarchy_with_weights, indent=2)}", flush=True)
+    
     def get_global_code_map():
         #Restituisce: { purl: [ {file: 'nomefile.json', name: '...', version: '...'}, ... ] }
         global_map = {}
@@ -965,7 +997,8 @@ def generate_docker_sbom(docker_target: str, vuln_type: str = "os,library"):
         "message": "SBOM Docker generato, scaricato e confrontato con successo.",
         "docker_report": docker_report,
         "raw_docker_sbom": raw_docker_sbom,
-        "graphs": docker_graph_results
+        "graphs": docker_graph_results,
+        "hierarchy_with_weights": hierarchy_with_weights
     }
 
 if __name__ == "__main__":
