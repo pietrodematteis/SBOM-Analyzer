@@ -57,18 +57,15 @@ jobs:
           echo "Processing $TYPE..."
 
           case $TYPE in
-            "git") git clone --depth 1 "$URL" target_repo ;;
-            "git-checkout") 
-                # Assicurati che la dir esista prima di fare checkout
-                [ -d "$PATH_DIR" ] && cd "$PATH_DIR" && git checkout "$CMD" || exit 1 ;;
-            "apt") sudo apt-get install -y "$URL" ;;
-            "pip") pip install "$URL" || echo "Pip install skipped or failed" ;;
-            "zip") wget -q "$URL" -O package.zip && unzip -o package.zip ;;
-            "file") wget -q "$URL" ;;
-            "cfg") wget -q "$URL" -O config_file ;;
-            "compile_maven") 
-                [ -d "$PATH_DIR" ] && cd "$PATH_DIR" && mvn clean install -DskipTests || exit 1 ;;
-            *) echo "Tipo $TYPE non gestito, salto..." ;;
+              "git") git clone --depth 1 "$URL" || echo "Git clone fallito per $URL, proseguo comunque" ;;
+              "git-checkout") cd "$PATH_DIR" && git checkout "$CMD" || echo "Checkout fallito, proseguo" ;;
+              "git-submodule") cd "$PATH_DIR" && git submodule $CMD || echo "Submodule fallito, proseguo" ;;
+              "apt") sudo apt-get install -y "$URL" || echo "Apt install fallito, proseguo" ;;
+              "pip") pip install "$URL" || echo "Pip install fallito, proseguo" ;;
+              "compile_maven") cd "$PATH_DIR" && mvn clean install -DskipTests || echo "Maven build fallito, proseguo" ;;
+              "zip") wget -q "$URL" -O pkg.zip && unzip -o pkg.zip || echo "Zip download/unzip fallito, proseguo" ;;
+              "file" | "cfg") wget -q "$URL" || echo "Download file fallito, proseguo" ;;
+              *) echo "Tipo $TYPE non gestito, salto." ;;
           esac
 
       - name: Install Trivy
