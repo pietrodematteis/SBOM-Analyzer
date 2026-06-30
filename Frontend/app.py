@@ -69,7 +69,7 @@ docker_choice = st.radio(
     
 docker_file = None
 if docker_choice == "Carica SBOM Docker esistente (JSON)":
-    # Se l'utente sceglie di caricare un file SBOM Docker, mostriamo il file uploader
+    # Se l'utente sceglie di caricare un file SBOM Docker, mostriamo il file uploader per caricare il file JSON
     
     docker_file = st.file_uploader("Carica lo SBOM dell'immagine Docker", type=["json"])
 
@@ -204,7 +204,6 @@ if "found_files" in st.session_state and st.session_state.found_files:
         for item in st.session_state.analysis_results_standard["data"]:
             st.subheader(f"📦 Risultato per {item['file_name']}")
 
-            # contenitore con altezza fissa (scrollabile)
             with st.container(height=300):
                 st.json(item["content"])
 
@@ -214,8 +213,8 @@ if "found_files" in st.session_state and st.session_state.found_files:
                 st.link_button("🔗 Vedi Log Action", item["github_run_url"], use_container_width=True)
 
             with col_btn2:
-                # Prepariamo il contenuto per il download
-                # Convertiamo il dizionario content in stringa JSON
+                # preparazione del contenuto JSON per il download
+                # Creiamo una stringa JSON formattata con indentazione per il download
                 json_str = json.dumps(item["content"], indent=4)
                 
                 st.download_button(
@@ -449,7 +448,7 @@ if st.session_state.analysis_results is not None:
         
             if st.button("📊 Applica File Docker Caricato al Confronto", use_container_width=True):
         
-                # Se carichi manualmente lo SBOM, ci assicuriamo che esista un contenitore in session_state
+                # Se si carica manualmente lo SBOM, ci assicuriamo che esista un contenitore in session_state
                 if st.session_state.analysis_results is None:
         
                     st.session_state.analysis_results = {"result": [], "docker_report": {}}
@@ -457,8 +456,6 @@ if st.session_state.analysis_results is not None:
                 try:
                     # Parsing del file caricato dall'utente e inserimento nello stato
                     uploaded_content = json.loads(docker_file.getvalue().decode("utf-8"))
-                    # Qui ipotizziamo che il backend abbia già popolato il "docker_report" nell'endpoint /upload-sbom, 
-                    # o gestisci il parsing del dizionario custom caricato.
                     st.session_state.docker_analyzed = True
                     st.rerun()
         
@@ -570,7 +567,7 @@ if st.session_state.analysis_results is not None:
             missing_in_docker = current_docker_report.get("missing_in_docker", [])
             
             if missing_in_docker:
-                # Trasformiamo la lista di dizionari in un DataFrame leggibile
+                # Creazione di un DataFrame per visualizzare le dipendenze mancanti in modo tabellare
                 df_missing = pd.DataFrame([
                     {
                         "Componente": m.get("name", "-"),
@@ -614,7 +611,7 @@ if st.session_state.analysis_results is not None:
                 "edges": [{"source": parent, "target": child} for parent, children in docker_graphs.items() for child in children]
             }
         
-        # Combiniamo i due dizionari
+        # Unione dei due dizionari
         all_graphs = {**repo_graphs, **normalized_docker_graphs}
         
         if all_graphs:
@@ -669,7 +666,7 @@ if st.session_state.analysis_results is not None:
                     
                     df_filtered = df[df["Peso (Dipendenze Totali)"] > 0].sort_values(by="Peso (Dipendenze Totali)", ascending=False)
                     
-                    # Usiamo una visualizzazione a barre colorata
+                    # visualizzazione a barre colorata
                     st.bar_chart(df_filtered.set_index("Pacchetto"))
                     
                     # Tabella dettagliata
@@ -698,7 +695,7 @@ if st.session_state.analysis_results is not None:
         if git_repos:
         
             for r in sorted(list(set(git_repos))): 
-                # Se la URL è valida, rendila cliccabile; altrimenti, visualizzala come testo normale
+                # Se la URL è valida -> cliccabile; altrimenti, visualizzala come testo normale
                 st.markdown(f"- [{r}]({r})" if r.startswith("http") else f"- {r}")
         
         else: st.info("Nessuna repository GitHub mappata.")

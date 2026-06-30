@@ -224,7 +224,7 @@ def build_universal_hierarchy(name_sbom_file_docker: str, folder_path: str):
                 except Exception as e:
                     print(f"[ERROR] Impossibile elaborare {file_name}: {e}")
 
-    # Conversione "Grafo -> Mappa" (La traduzione necessaria)
+    # Conversione in un'unica mappa di dipendenze per facilitare la costruzione della gerarchia totale
     unified_map = {}
     for filename, data in all_dependencies_data.items():
         for edge in data.get("deps", []):
@@ -333,7 +333,7 @@ def wait_and_download_artifacts(run_id: int, dest_dir: str):
     with zipfile.ZipFile(zip_path, 'r') as zip_ref:
         for file_name in zip_ref.namelist():
             if file_name.endswith(".json"):
-                # Estrai il file temporaneamente
+                # Estrazione del file temporaneamente
                 zip_ref.extract(file_name, dest_dir)
                 file_path = os.path.join(dest_dir, file_name)
                 
@@ -755,7 +755,7 @@ def analyze_dependencies_sbom(
     for folder in folders_to_scan:
         if os.path.exists(folder):
             for file_name in os.listdir(folder):
-                if file_name.endswith("-sbom.json"):
+                if file_name.endswith(".json"):
                     
                     file_path = os.path.join(folder, file_name)
                     try:
