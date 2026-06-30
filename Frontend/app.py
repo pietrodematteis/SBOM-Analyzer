@@ -3,6 +3,7 @@ import requests
 import pandas as pd
 import json
 from streamlit_agraph import agraph, Node, Edge, Config
+import re
 
 # ============================================================
 # CONFIGURAZIONE APP STREAMLIT
@@ -351,33 +352,35 @@ if st.session_state.analysis_results is not None:
                 with r_req:  st.write(c_req)
                 with r_poe:  st.write(c_poe)
                 
-                with r_az: # Logica per il download dello SBOM specifico di quella dipendenza (se disponibile)
-            
-                    clean_repo_name = c_url.replace("https://github.com/", "").replace("/", "-").replace(".git", "")
+                with r_az:
+                    
+                    # Normalizzazione dell'URL come nello YAML (rimuoviamo protocolli e rendiamo alfanumerico)
+                    url_clean = re.sub(r'[^a-zA-Z0-9]', '-', c_url.replace("https://", "").replace("http://", ""))
+                    url_clean = re.sub(r'-+', '-', url_clean).strip('-')
+                    
+                    expected_start = f"{c_tipo}-{url_clean}".lower()
                     
                     deep_results = st.session_state.get("deep_sbom_results") or {}
                     available_sboms = deep_results.get("sboms", {})
-                    
-                    # Cerchiamo una chiave che contenga il nome pulito della repo, considerando che il backend potrebbe aver aggiunto suffissi o prefissi
-                    matching_key = next((k for k in available_sboms.keys() if clean_repo_name in k), None)
-                    
+
+                    matching_key = next((k for k in available_sboms.keys() if expected_start in k.lower()), None)
+
                     if matching_key:
                         st.download_button(
                             label="⬇️ SBOM",
                             data=available_sboms[matching_key],
                             file_name=matching_key, 
                             mime="application/json",
-                            key=f"dl_row_{clean_repo_name}_{idx}",
+                            key=f"dl_row_{idx}",
                             use_container_width=True
                         )
                     else:
                         st.button(
                             label="🚫 Non Disp.", 
                             key=f"disabled_row_{idx}", 
-                            disabled=True,
+                            disabled=True, 
                             use_container_width=True
                         )
-
         # ============================================================
         # SEZIONE DI ANALISI IMMAGINE DOCKER 
         # ============================================================

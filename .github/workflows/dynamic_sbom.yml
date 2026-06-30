@@ -63,7 +63,7 @@ jobs:
           PATH_DIR="${{ matrix.item.path || '.' }}"
           
           # Nome file unico per l'artefatto
-          CLEAN_NAME=$(echo "$URL$TYPE" | sed 's|[^a-zA-Z0-9]|-|g' | cut -c 1-30)
+          CLEAN_NAME=$(echo "${TYPE}-${URL}" | sed 's|[^a-zA-Z0-9]|-|g' | sed 's|---*|-|g')
           
           echo ">>> Elaborazione: $TYPE"
           case $TYPE in
