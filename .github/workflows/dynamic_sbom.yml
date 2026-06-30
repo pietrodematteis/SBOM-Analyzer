@@ -23,9 +23,22 @@ jobs:
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
-      - uses: actions/checkout@v4
-      - id: set-matrix
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Parse JSON to Matrix
+        id: set-matrix
         run: |
+          echo "Contenuto del file:"
+          cat ${{ github.event.inputs.path_dipendenze }}
+          
+          # Verifica se il file JSON è valido
+          if ! jq empty ${{ github.event.inputs.path_dipendenze }}; then
+            echo "::error::Il file JSON non è valido!"
+            exit 1
+          fi
+          
+          # Se è valido, carichiamo la matrice
           MATRIX=$(jq -c '.' ${{ github.event.inputs.path_dipendenze }})
           echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
 
