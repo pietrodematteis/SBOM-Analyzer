@@ -762,7 +762,6 @@ def analyze_dependencies_sbom(
                         with open(file_path, "r", encoding="utf-8") as f:
                             # Usiamo il path relativo o il nome come chiave
                             generated_sboms[file_name] = f.read()
-                        print(f"[BACKEND] Caricato con successo: {file_name}", flush=True)
                     except Exception as e:
                         print(f"[BACKEND] Errore nella lettura {file_path}: {str(e)}", flush=True)
     

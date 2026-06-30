@@ -354,16 +354,26 @@ if st.session_state.analysis_results is not None:
                 
                 with r_az:
                     
-                    # Normalizzazione dell'URL come nello YAML (rimuoviamo protocolli e rendiamo alfanumerico)
+                    # Creazione di un nome pulito per il file SBOM da scaricare, basato su URL e tipo, con sostituzione dei caratteri non alfanumerici
                     url_clean = re.sub(r'[^a-zA-Z0-9]', '-', c_url.replace("https://", "").replace("http://", ""))
-                    url_clean = re.sub(r'-+', '-', url_clean).strip('-')
-                    
-                    expected_start = f"{c_tipo}-{url_clean}".lower()
-                    
+                    url_clean = re.sub(r'-+', '-', url_clean).strip('-').lower()
+                    c_tipo_clean = c_tipo.lower()
+
                     deep_results = st.session_state.get("deep_sbom_results") or {}
                     available_sboms = deep_results.get("sboms", {})
 
-                    matching_key = next((k for k in available_sboms.keys() if expected_start in k.lower()), None)
+                    # Cerchiamo se il file contiene ALMENO le parti fondamentali: 
+                    # il tipo e una parte significativa dell'URL (se l'URL è lungo)
+                    def is_match(file_key, tipo, url_part):
+                        file_key = file_key.lower()
+                        # Se è un file tipo apt/pip, il nome è spesso breve
+                        if tipo in ['apt', 'pip']:
+                            return tipo in file_key and url_part[:10] in file_key
+                        # Se è git/zip/altro, cerchiamo il tipo e il nome della repo
+                        return tipo in file_key and url_part in file_key
+
+                    matching_key = next((k for k in available_sboms.keys() if is_match(k, c_tipo_clean, url_clean)), None)
+                    
 
                     if matching_key:
                         st.download_button(
