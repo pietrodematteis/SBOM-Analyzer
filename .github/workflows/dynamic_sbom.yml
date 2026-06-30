@@ -16,36 +16,28 @@ on:
         default: 'dependencies.json'
 
 jobs:
-  # --- JOB 0: PREPARAZIONE MATRICE ---
-  # La matrice serve per generare un job per ogni dipendenza da analizzare in parallelo, in modo di isolare l'ambiente di build e generare un SBOM separato per ogni dipendenza.
+  # --- JOB 1: ESTRAZIONE MATRICE ---
   parse-dependencies:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
-      - name: Checkout Repository
+      - name: Checkout Target Repository
         uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.inputs.src_repository }}
+          ref: ${{ github.event.inputs.src_branch }}
 
       - name: Parse JSON to Matrix
         id: set-matrix
         run: |
-          echo "Contenuto del file:"
-          cat ${{ github.event.inputs.path_dipendenze }}
-          
-          # Verifica se il file JSON è valido
-          if ! jq empty ${{ github.event.inputs.path_dipendenze }}; then
-            echo "::error::Il file JSON non è valido!"
-            exit 1
-          fi
-          
-          # Se è valido, carichiamo la matrice
-          MATRIX=$(jq -c '.' ${{ github.event.inputs.path_dipendenze }})
-          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
+          # Legge tutto l'array dal file
+          DEPENDENCIES=$(jq -c '.' ${{ github.event.inputs.path_dipendenze }})
+          echo "matrix=$DEPENDENCIES" >> $GITHUB_OUTPUT
 
-  # --- JOB 1: ANALISI IN PARALLELO (MATRIX) ---
+  # --- JOB 2: ANALISI IN PARALLELO ---
   trivy-analysis:
     needs: parse-dependencies
-    if: ${{ needs.parse-dependencies.outputs.matrix != '' }}
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -60,51 +52,39 @@ jobs:
 
       - name: Install Trivy
         run: |
-          sudo apt-get update && sudo apt-get install -y wget apt-transport-https gnupg lsb-release
-          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | gpg --dearmor | sudo tee /usr/share/keyrings/trivy.gpg > /dev/null
-          echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee /etc/apt/sources.list.d/trivy.list
           sudo apt-get update && sudo apt-get install -y trivy
 
-      - name: Setup and Build Environment
+      - name: Setup and Analyze
         run: |
-          # Estrazione dei dati dall'item della matrice
-          TYPE=$(echo '${{ toJson(matrix.item) }}' | jq -r '.type')
-          URL=$(echo '${{ toJson(matrix.item) }}' | jq -r '.url // ""')
-          CMD=$(echo '${{ toJson(matrix.item) }}' | jq -r '.cmd // ""')
-          PATH_DIR=$(echo '${{ toJson(matrix.item) }}' | jq -r '.path // "."')
+          # Accesso diretto ai campi dell'oggetto item della matrice
+          TYPE="${{ matrix.item.type }}"
+          URL="${{ matrix.item.url }}"
+          CMD="${{ matrix.item.cmd }}"
+          PATH_DIR="${{ matrix.item.path || '.' }}"
           
-          # nome pulito per il file SBOM
-          CLEAN_NAME=$(echo "$URL$TYPE" | sed 's|https://||; s|http://||; s|/|-|g; s|\.||g' | cut -c 1-50)
-          
-          # Creazione di una cartella isolata per la build, in modo da evitare contaminazioni tra le dipendenze
-          mkdir -p isolated_build
-          cd isolated_build
+          # Nome file unico per l'artefatto
+          CLEAN_NAME=$(echo "$URL$TYPE" | sed 's|[^a-zA-Z0-9]|-|g' | cut -c 1-30)
           
           echo ">>> Elaborazione: $TYPE"
-          
-          # Esecuzione del comando specifico per il tipo di dipendenza
           case $TYPE in
             "git") git clone --depth 1 "$URL" target_repo || true ;;
-            "git-checkout") cd "$PATH_DIR" && git checkout "$CMD" || true ;;
-            "git-submodule") cd "$PATH_DIR" && git submodule $CMD || true ;;
             "apt") sudo apt-get install -y "$URL" || true ;;
-            "pip") pip install "$URL" --target=. || true ;;
+            "pip") pip install "$URL" || true ;;
             "compile_maven") cd "$PATH_DIR" && mvn clean install -DskipTests || true ;;
             "zip") wget -q "$URL" -O pkg.zip && unzip -o pkg.zip || true ;;
             "file" | "cfg") wget -q "$URL" || true ;;
           esac
           
-          # Generazione del SBOM con Trivy
-          trivy fs --format cyclonedx --output "../${CLEAN_NAME}-sbom.json" .
+          trivy fs --format cyclonedx --output "${CLEAN_NAME}-sbom.json" .
 
-      - name: Upload Temporary Individual Artifacts
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: tmp-sbom-${{ github.run_id }}-${{ strategy.job-index }}
+          name: sbom-${{ strategy.job-index }}
           path: "*-sbom.json"
           retention-days: 1
 
-  # --- JOB 2: UNIFICAZIONE FINALE ---
+  # --- JOB 3: UNIFICAZIONE ---
   merge-sboms:
     needs: trivy-analysis
     runs-on: ubuntu-latest
@@ -115,7 +95,6 @@ jobs:
       - name: Download All Temporary Artifacts
         uses: actions/download-artifact@v4
         with:
-          pattern: tmp-sbom-${{ github.run_id }}-*
           path: combined-results
           merge-multiple: true
 
