@@ -76,8 +76,9 @@ jobs:
 
             "pip") # Creiamo un ambiente virtuale per isolare l'installazione dei pacchetti Python
                   python3 -m venv workspace_analisi/venv
-                  ../workspace_analisi/venv/bin/pip install --upgrade pip
-                  ./workspace_analisi/venv/bin/pip install "$URL";;
+                  ./workspace_analisi/venv/bin/pip install --no-cache-dir "$URL"
+                  ./workspace_analisi/venv/bin/pip freeze > workspace_analisi/requirements.txt
+                  ;;
 
             "compile_maven") cd "$PATH_DIR" && mvn clean install -DskipTests && cp -r . workspace_analisi/ ;;
 
