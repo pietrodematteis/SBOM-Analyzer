@@ -74,22 +74,28 @@ jobs:
 
             "apt") sudo apt-get install -y "$URL" && cp /var/lib/dpkg/status workspace_analisi/ ;;
 
-            "pip") # Creiamo un ambiente virtuale per isolare l'installazione dei pacchetti Python
-                  python3 -m venv workspace_analisi/venv
-                  
-                  # se URL inizia con "-r" (è un file) o è un pacchetto diretto
-                  if [[ "$URL" == -r* ]]; then
-                      # Rimuoviamo eventuali spazi extra e installiamo dal file
-                      FILE_PATH=$(echo "$URL" | sed 's/^-r //')
-                      ./workspace_analisi/venv/bin/pip install --no-cache-dir -r "$FILE_PATH"
-                  else
-                      # È un pacchetto singolo, installazione diretta
-                      ./workspace_analisi/venv/bin/pip install --no-cache-dir "$URL"
-                  fi
-                  
-                  # Genera il manifest
-                  ./workspace_analisi/venv/bin/pip freeze > workspace_analisi/requirements.txt
-                  ;;
+            "pip")
+                python3 -m venv workspace_analisi/venv
+                
+                # Costruiamo il percorso assoluto partendo dalla root del repository
+                # Rimuoviamo eventuali spazi o prefissi '-r ' se presenti nel JSON
+                CLEAN_PATH=$(echo "$URL" | sed 's/^-r //' | xargs)
+                ABSOLUTE_PATH="$GITHUB_WORKSPACE/$CLEAN_PATH"
+                
+                if [[ "$URL" == -r* ]]; then
+                    if [ -f "$ABSOLUTE_PATH" ]; then
+                        ./workspace_analisi/venv/bin/pip install --no-cache-dir -r "$ABSOLUTE_PATH"
+                    else
+                        echo "ERRORE: File non trovato in $ABSOLUTE_PATH. Ecco cosa c'è nella cartella:"
+                        find "$GITHUB_WORKSPACE" -name "requirements.txt"
+                        exit 1
+                    fi
+                else
+                    ./workspace_analisi/venv/bin/pip install --no-cache-dir "$URL"
+                fi
+                
+                ./workspace_analisi/venv/bin/pip freeze > workspace_analisi/requirements.txt
+                ;;
 
             "compile_maven") cd "$PATH_DIR" && mvn clean install -DskipTests && cp -r . workspace_analisi/ ;;
 
