@@ -74,28 +74,34 @@ jobs:
 
             "apt") sudo apt-get install -y "$URL" && cp /var/lib/dpkg/status workspace_analisi/ ;;
 
-            "pip")
-                python3 -m venv workspace_analisi/venv
-                
-                # Costruiamo il percorso assoluto partendo dalla root del repository
-                # Rimuoviamo eventuali spazi o prefissi '-r ' se presenti nel JSON
-                CLEAN_PATH=$(echo "$URL" | sed 's/^-r //' | xargs)
-                ABSOLUTE_PATH="$GITHUB_WORKSPACE/$CLEAN_PATH"
-                
-                if [[ "$URL" == -r* ]]; then
-                    if [ -f "$ABSOLUTE_PATH" ]; then
-                        ./workspace_analisi/venv/bin/pip install --no-cache-dir -r "$ABSOLUTE_PATH"
-                    else
-                        echo "ERRORE: File non trovato in $ABSOLUTE_PATH. Ecco cosa c'è nella cartella:"
-                        find "$GITHUB_WORKSPACE" -name "requirements.txt"
-                        exit 1
-                    fi
-                else
-                    ./workspace_analisi/venv/bin/pip install --no-cache-dir "$URL"
-                fi
-                
-                ./workspace_analisi/venv/bin/pip freeze > workspace_analisi/requirements.txt
-                ;;
+            "pip") 
+              # Creazione ambiente isolato
+              python3 -m venv workspace_analisi/venv
+              
+              # Pulizia dell'URL per rimuovere eventuali spazi bianchi
+              CLEAN_URL=$(echo "$URL" | xargs)
+              
+              # Logica intelligente: riconosce se è un file o un pacchetto
+
+              if [[ "$CLEAN_URL" == -r* ]]; then
+                  # È un file: estrai il path e installa
+                  FILE_PATH=$(echo "$CLEAN_URL" | sed 's/^-r //')
+                  ABSOLUTE_PATH="$GITHUB_WORKSPACE/$FILE_PATH"
+                  
+                  if [ -f "$ABSOLUTE_PATH" ]; then
+                      ./workspace_analisi/venv/bin/pip install --no-cache-dir -r "$ABSOLUTE_PATH"
+                  else
+                      echo "ERRORE: File $ABSOLUTE_PATH non trovato!"
+                      exit 1
+                  fi
+              else
+                  # È un pacchetto singolo: installa direttamente
+                  ./workspace_analisi/venv/bin/pip install --no-cache-dir "$CLEAN_URL"
+              fi
+              
+              # Generazione del manifest per Trivy
+              ./workspace_analisi/venv/bin/pip freeze > workspace_analisi/requirements.txt
+              ;;
 
             "compile_maven") cd "$PATH_DIR" && mvn clean install -DskipTests && cp -r . workspace_analisi/ ;;
 
