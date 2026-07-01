@@ -214,6 +214,7 @@ def build_universal_hierarchy(name_sbom_file_docker: str, folder_path: str):
     search_paths = [os.path.join(folder_path, d) for d in ["manifests", "dependencies"] 
                     if os.path.exists(os.path.join(folder_path, d))]
     
+    # Analizziamo tutti i file JSON trovati nelle cartelle specificate
     for path in search_paths:
         for file_name in os.listdir(path):
             if file_name.endswith(".json"):
@@ -899,10 +900,14 @@ def generate_docker_sbom(docker_target: str, vuln_type: str = "os,library"):
             name = parts[0].split("/")[-1].lower().strip()
             code_version_map[name] = version
     
+    # Creiamo un set di tutti i nomi dei pacchetti nel codice per un confronto più semplice
     all_code_names_only = {entry["name"].lower().strip() for entries in code_map.values() for entry in entries if entry.get("name")}
     
     docker_components_unique = {f"{c['name'].lower().strip()}@{c['version']}": c for c in docker_components}.values()
+    
     # CONFRONTO OTTIMIZZATO
+    # Viene confrontato ogni componente Docker con la mappa globale dei componenti del codice, basandosi prima sul PURL (se disponibile)
+    # e poi sul nome del pacchetto (per versioni diverse o assenti)
     for dc in docker_components_unique:
         dc_name_clean = dc["name"].lower().strip()
         dc_purl_clean = dc["purl"].lower().strip() if dc["purl"] else ""

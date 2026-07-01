@@ -59,23 +59,27 @@ jobs:
           # Accesso diretto ai campi dell'oggetto item della matrice
           TYPE="${{ matrix.item.type }}"
           URL="${{ matrix.item.url }}"
-          CMD="${{ matrix.item.cmd }}"
           PATH_DIR="${{ matrix.item.path || '.' }}"
           
           # Nome file unico per l'artefatto
           CLEAN_NAME=$(echo "${TYPE}-${URL}" | sed 's|[^a-zA-Z0-9]|-|g' | sed 's|---*|-|g')
           
           echo ">>> Elaborazione: $TYPE"
+          
+          # Creiamo una cartella isolata per l'analisi del componente
+          mkdir -p workspace_analisi
+          
           case $TYPE in
-            "git") git clone --depth 1 "$URL" target_repo || true ;;
-            "apt") sudo apt-get install -y "$URL" || true ;;
-            "pip") pip install "$URL" || true ;;
-            "compile_maven") cd "$PATH_DIR" && mvn clean install -DskipTests || true ;;
-            "zip") wget -q "$URL" -O pkg.zip && unzip -o pkg.zip || true ;;
-            "file" | "cfg") wget -q "$URL" || true ;;
+            "git") git clone --depth 1 "$URL" workspace_analisi/repo ;;
+            "apt") sudo apt-get install -y "$URL" && cp /var/lib/dpkg/status workspace_analisi/ ;;
+            "pip") pip install "$URL" && pip show "$URL" > workspace_analisi/pkg_info.txt ;;
+            "compile_maven") cd "$PATH_DIR" && mvn clean install -DskipTests && cp -r . workspace_analisi/ ;;
+            "zip") wget -q "$URL" -O pkg.zip && unzip -o pkg.zip -d workspace_analisi/ ;;
+            "file" | "cfg") wget -q "$URL" -O workspace_analisi/file_target ;;
           esac
           
-          trivy fs --format cyclonedx --output "${CLEAN_NAME}-sbom.json" .
+          # ANALISI ISOLATA: Trivy guarda SOLO dentro 'workspace_analisi', in modo da non contaminare l'ambiente globale
+          trivy fs --format cyclonedx --output "${CLEAN_NAME}-sbom.json" workspace_analisi/
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
