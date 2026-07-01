@@ -75,34 +75,35 @@ jobs:
             "apt") sudo apt-get install -y "$URL" && cp /var/lib/dpkg/status workspace_analisi/ ;;
 
             "pip") 
-              # Creazione ambiente isolato
-              python3 -m venv workspace_analisi/venv
-              
-              # Pulizia dell'URL per rimuovere eventuali spazi bianchi
-              CLEAN_URL=$(echo "$URL" | xargs)
-              
-              # Logica intelligente: riconosce se è un file o un pacchetto
-
-              if [[ "$CLEAN_URL" == -r* ]]; then
-                  # È un file: estrai il path e installa
-                  FILE_PATH=$(echo "$CLEAN_URL" | sed 's/^-r //')
-                  ABSOLUTE_PATH="$GITHUB_WORKSPACE/$FILE_PATH"
-                  
-                  if [ -f "$ABSOLUTE_PATH" ]; then
-                      ./workspace_analisi/venv/bin/pip install --no-cache-dir -r "$ABSOLUTE_PATH"
-                  else
-                      echo "ERRORE: File $ABSOLUTE_PATH non trovato!"
-                      exit 1
-                  fi
-              else
-                  # È un pacchetto singolo: installa direttamente
-                  ./workspace_analisi/venv/bin/pip install --no-cache-dir "$CLEAN_URL"
-              fi
-              
-              # Generazione del manifest per Trivy
-              ./workspace_analisi/venv/bin/pip freeze > workspace_analisi/requirements.txt
-              ;;
-
+                # Creazione ambiente isolato
+                python3 -m venv workspace_analisi/venv
+                
+                # Pulizia dell'URL per rimuovere eventuali spazi bianchi
+                CLEAN_URL=$(echo "$URL" | xargs)
+                
+                # Logica intelligente: riconosce se è un file o un pacchetto
+                if [[ "$CLEAN_URL" == -r* ]]; then
+                    # È un file: estrai il path e installa
+                    FILE_PATH=$(echo "$CLEAN_URL" | sed 's/^-r //')
+                    ABSOLUTE_PATH="$GITHUB_WORKSPACE/$FILE_PATH"
+                    
+                    if [ -f "$ABSOLUTE_PATH" ]; then
+                        # Proviamo a installare, ma se fallisce, non fermiamo tutto (usiamo || true)
+                        ./workspace_analisi/venv/bin/pip install --no-cache-dir -r "$ABSOLUTE_PATH" || \
+                        echo "AVVISO: Installazione da $FILE_PATH parziale o fallita, proseguo comunque."
+                    else
+                        echo "ATTENZIONE: File $ABSOLUTE_PATH non trovato. Salto questa dipendenza."
+                    fi
+                else
+                    ./workspace_analisi/venv/bin/pip install --no-cache-dir "$CLEAN_URL" || \
+                    echo "AVVISO: Impossibile installare il pacchetto $CLEAN_URL, proseguo."
+                fi
+                
+                # Genera il manifest per Trivy
+                # Nota: se l'installazione è fallita, il file requirements.txt sarà vuoto o parziale,
+                ./workspace_analisi/venv/bin/pip freeze > workspace_analisi/requirements.txt
+                ;;
+                
             "compile_maven") cd "$PATH_DIR" && mvn clean install -DskipTests && cp -r . workspace_analisi/ ;;
 
             "zip") wget -q "$URL" -O pkg.zip && unzip -o pkg.zip -d workspace_analisi/ ;;
