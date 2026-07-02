@@ -1,4 +1,5 @@
-fastapi==0.137.2
+dockerfile_parse==2.0.1
+fastapi==0.139.0
 pandas==3.0.3
 python-dotenv==1.2.2
 Requests==2.34.2
