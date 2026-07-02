@@ -334,7 +334,6 @@ if st.session_state.analysis_results is not None:
 
             # Filtriamo le colonne in base al valore ricevuto nel primo elemento (se esiste)
             # Se il primo elemento ha "N/A" per una colonna, la escludiamo dal rendering
-            print ("DEBUG: dependencies[0] = ", dependencies[0] if dependencies else {})
             first_item = dependencies[0] if dependencies else {}
             visible_keys = [
                 k for k in all_columns.keys() 
@@ -678,7 +677,8 @@ if st.session_state.analysis_results is not None:
                     impact_data = [
                         {
                             "Pacchetto": purl.split('/')[-1].split('@')[0], 
-                            "Peso (Dipendenze Totali)": data.get("weight", 0)
+                            "Peso (Dipendenze Totali)": data.get("weight", 0),
+                            "Dipendenze Sovrapposte": str(data.get("overlap", 0))
                         } 
                         for purl, data in hierarchy_with_weights.items()
                     ]
@@ -686,16 +686,30 @@ if st.session_state.analysis_results is not None:
                     
                     df = pd.DataFrame(impact_data)
                     
-                    df_filtered = df[df["Peso (Dipendenze Totali)"] > 0].sort_values(by="Peso (Dipendenze Totali)", ascending=False)
+                    # Filtriamo solo i pacchetti con peso maggiore di 0 e ordiniamo per peso decrescente
+                    df_filtered = df[df["Peso (Dipendenze Totali)"] > 0].sort_values(
+                        by="Peso (Dipendenze Totali)", 
+                        ascending=False
+                        )
+                    
+                    # Conversione della colonna Pacchetto in una categoria ordinata così da mantenere l'ordine nel grafico a barre
+                    df_filtered["Pacchetto"] = pd.Categorical(
+                        df_filtered["Pacchetto"], 
+                        categories=df_filtered["Pacchetto"].unique(), 
+                        ordered=True
+                        )
+                    
+                    # visualizzazione a barre del peso delle dipendenze
+                    chart_data = df_filtered.set_index("Pacchetto")[["Peso (Dipendenze Totali)"]]
                     
                     # visualizzazione a barre colorata
-                    st.bar_chart(df_filtered.set_index("Pacchetto"))
+                    st.bar_chart(chart_data)
                     
                     # Tabella dettagliata
                     st.dataframe(df_filtered, use_container_width=True)
             
                 
-                    st.info("💡 Il 'peso' indica quante dipendenze (dirette e indirette) ogni pacchetto trascina con sé.")
+                    st.info("Il 'peso' indica quante dipendenze (dirette e indirette) ogni pacchetto trascina con sé. Le dipendenze sovrapposte rappresentano quelle condivise con altri pacchetti.")
         
         else:
         

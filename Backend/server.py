@@ -264,20 +264,33 @@ def build_universal_hierarchy(name_sbom_file_docker: str, folder_path: str):
 # FUNZIONE DI SUPPORTO PER CALCOLARE IL PESO DI UNA DIPENDENZA (numero totale di dipendenze dirette e indirette)
 # ============================================================
 
-def get_dependency_weight(purl, hierarchy, memo=None):
+def get_dependency_weight(purl, hierarchy, memo=None, visited_global=None):
     if memo is None: memo = {} # memo è un dizionario per memorizzare i risultati già calcolati
     if purl in memo: return memo[purl] # Se il peso è già stato calcolato, ritorna il valore memorizzato
+    if visited_global is None: visited_global = set() # Inizializza il set globale per tracciare le dipendenze visitate per vedere le overlapped
     
-    # Dipendenze dirette
-    children = hierarchy.get(purl, [])
-    total = len(children)
+    count_total = 0 # totale delle dipendenze (dirette e indirette)
+    unique_nodes = set() # insieme dei nodi unici visitati per calcolare l'overlap
     
-    # Somma ricorsivamente le dipendenze dei figli
+    children = hierarchy.get(purl, []) # Recupera i figli della dipendenza corrente dalla gerarchia
+    
     for child in children:
-        total += get_dependency_weight(child, hierarchy, memo)
+        # Aggiungiamo il figlio stesso
+        count_total += 1
+        unique_nodes.add(child)
         
-    memo[purl] = total
-    return total
+        # Chiamata ricorsiva
+        child_total, child_unique, child_overlap = get_dependency_weight(child, hierarchy, memo, visited_global)
+        
+        count_total += child_total
+        unique_nodes.update(child_unique)
+    
+    # Calcolo overlap: (Nodi totali visitati nella ricorsione) - (Nodi univoci)
+    overlap = count_total - len(unique_nodes)
+    
+    # Memorizziamo sia il totale che l'insieme dei nodi univoci
+    memo[purl] = (count_total, unique_nodes, overlap)
+    return count_total, unique_nodes, overlap
 
 # ============================================================
 # LOGICA DI POLLING E SCARICAMENTO ARTIFACT
@@ -315,7 +328,6 @@ def wait_and_download_artifacts(run_id: int, dest_dir: str):
     target_artifact = next((a for a in artifacts if "sbom" in a["name"].lower() or "results" in a["name"].lower() or "trivy" in a["name"].lower()), None)
     
     if not target_artifact:
-        print("[DEBUG X] Nessun artifact contenente 'sbom' trovato per questa run.", flush=True)
         return False
 
     # Download del pacchetto ZIP dell'artifact
@@ -361,10 +373,8 @@ def wait_and_download_artifacts(run_id: int, dest_dir: str):
 
 def trigger_github_action(workflow_file: str, inputs: dict) -> Optional[dict]:
     """Innesca una pipeline remota specifica e restituisce un dizionario con URL e Run ID."""
-    print(f"[DEBUG 1] Entrato in trigger_github_action per {workflow_file}", flush=True)
     headers = github_headers()
     if not headers:
-        print("[DEBUG X] ERRORE: GITHUB_TOKEN non trovato o vuoto nelle variabili d'ambiente!", flush=True)
         return None
 
     # URL dinamico basato sul file .yml passato come argomento
@@ -374,33 +384,25 @@ def trigger_github_action(workflow_file: str, inputs: dict) -> Optional[dict]:
         "inputs": inputs
     }
 
-    print(f"[DEBUG 2] Invio POST a workflow dispatch... URL: {url_dispatch}", flush=True)
     try:
         res = requests.post(url_dispatch, headers=headers, json=payload, timeout=10)
-        print(f"[DEBUG 3] Risposta POST dispatch: Stato {res.status_code}", flush=True)
         if res.status_code != 204:
-            print(f"[DEBUG X] Errore da GitHub Dispatch: {res.text}", flush=True)
             return None
     except Exception as err:
-        print(f"[DEBUG X] Eccezione durante la POST di dispatch: {err}", flush=True)
         return None
 
-    print("[DEBUG 4] Attesa di 6 secondi per la registrazione della run...", flush=True)
     time.sleep(6)
     
     url_runs = f"{GITHUB_API}/{MY_GITHUB_OWNER}/{MY_GITHUB_REPO}/actions/runs?per_page=1"
-    print(f"[DEBUG 5] Recupero l'ultima run dall'URL: {url_runs}", flush=True)
     try:
         res_runs = requests.get(url_runs, headers=headers, timeout=10)
         if res_runs.status_code == 200:
             runs = res_runs.json().get("workflow_runs", [])
             if runs:
-                print(f"[DEBUG 6] Trovata run ID: {runs[0].get('id')}", flush=True)
                 return {
                     "html_url": runs[0].get("html_url"),
                     "id": runs[0].get("id")
                 }
-            print("[DEBUG X] Nessuna run trovata nella lista dei workflow_runs.", flush=True)
     except Exception as err:
         print(f"[DEBUG X] Eccezione durante la GET delle runs: {err}", flush=True)
             
@@ -847,11 +849,13 @@ def generate_docker_sbom(docker_target: str, vuln_type: str = "os,library"):
     memo = {}
     hierarchy_with_weights = {}
     
+    
     for purl in docker_graph_results:
-        weight = get_dependency_weight(purl, docker_graph_results, memo)
+        stats = get_dependency_weight(purl, docker_graph_results, memo, visited_global=set())
         hierarchy_with_weights[purl] = {
             "dependencies": docker_graph_results[purl],
-            "weight": weight
+            "weight": stats[0],
+            "overlap": stats[2]
         }
     
     
