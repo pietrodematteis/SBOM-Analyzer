@@ -1,5 +1,3 @@
-from weakref import ref
-
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 import json
 import subprocess
@@ -11,9 +9,7 @@ import tempfile
 import shutil
 import time
 import zipfile
-import traceback
 from typing import Optional
-from dockerfile_parse import DockerfileParser
 import stat
 
 # ============================================================
@@ -29,7 +25,7 @@ os.makedirs(STORAGE_DIR, exist_ok=True)
 GITHUB_API = "https://api.github.com/repos"
 MY_GITHUB_OWNER = os.getenv("MY_GITHUB_OWNER", "RiccardoCortese")
 MY_GITHUB_REPO = os.getenv("MY_GITHUB_REPO", "SBOM-Analyzer")
-
+STANDARD_FILE_ANALYZED = None  # Variabile globale per memorizzare il file standard analizzato
 
 
 # ============================================================
@@ -245,7 +241,7 @@ def build_universal_hierarchy(name_sbom_file_docker: str, folder_path: str):
             if target not in unified_map[source]["dependencies"]:
                 unified_map[source]["dependencies"].append(target)
 
-    # Costruzione della Gerarchia Universale
+    # Costruzione della gerarchia totale 
     with open(os.path.join(STORAGE_DIR, name_sbom_file_docker), "r") as f:
         trivy_data = json.load(f)
         sbom_components = trivy_data.get("components", [])
@@ -272,7 +268,7 @@ def get_dependency_weight(purl, hierarchy, memo=None):
     if memo is None: memo = {} # memo è un dizionario per memorizzare i risultati già calcolati
     if purl in memo: return memo[purl] # Se il peso è già stato calcolato, ritorna il valore memorizzato
     
-    # Prendi le dipendenze dirette
+    # Dipendenze dirette
     children = hierarchy.get(purl, [])
     total = len(children)
     
@@ -525,12 +521,14 @@ async def analyze_standard_file(
     repo_url: str = Form(...),
     branch: str = Form(...)
 ):
+    global STANDARD_FILE_ANALYZED
+    STANDARD_FILE_ANALYZED = format  # Aggiorniamo la variabile globale con il formato selezionato
     # Logica per gestire "Entrambi"
     files_da_analizzare = []
     if format == "Entrambi":
         files_da_analizzare = ["requirements", "poetry"] # Aggiungi quelli che vuoi
     else:
-        if format not in ["requirements", "poetry", "pyproject.toml", "poetry.lock"]:
+        if format not in ["requirements", "poetry", "pyproject.toml", "poetry.lock", "requirements.txt"]:
             raise HTTPException(status_code=400, detail="Formato non supportato per l'analisi standard.")
         elif format == "requirements.txt":
             files_da_analizzare = ["requirements"]
@@ -601,7 +599,7 @@ def run_standard_sbom_action(repo_url, branch, format):
     }
 
 # ============================================================
-# LOGICA 2: ANALISI AVANZATA (Solo per dependencies.json)
+# ANALISI AVANZATA (Solo per dependencies.json)
 # ============================================================
 @app.post("/analyze-custom-file")
 def analyze_custom_file(
@@ -660,6 +658,7 @@ def analyze_custom_file(
                     elif isinstance(item, str):
                         names.add(item.lower().strip())
                 return names, purls
+            
             except Exception:
                 return names, purls
 
@@ -681,9 +680,16 @@ def analyze_custom_file(
                 repos.append(github_repo)
 
             name_clean = str(name).lower().strip()
-
-            is_in_req = "✅" if name_clean in req_identifiers else "❌"
-            is_in_poetry = "✅" if name_clean in poetry_identifiers else "❌"
+            
+            if STANDARD_FILE_ANALYZED == "requirements.txt" or STANDARD_FILE_ANALYZED == "requirements":
+                is_in_req = "✅" if name_clean in req_identifiers else "❌"
+                is_in_poetry = "N/A"
+            elif STANDARD_FILE_ANALYZED == "pyproject.toml" or STANDARD_FILE_ANALYZED == "poetry":
+                is_in_req = "N/A"
+                is_in_poetry = "✅" if name_clean in poetry_identifiers else "❌"
+            else:
+                is_in_req = "✅" if name_clean in req_identifiers else "❌"
+                is_in_poetry = "✅" if name_clean in poetry_identifiers else "❌"
 
             extracted_data.append({
                 "type": dep_type,
@@ -727,9 +733,7 @@ def analyze_dependencies_sbom(
     path_file: str = Form(...)
 ):
     workflow_name = "dynamic_sbom.yml"
-    print(f"[BACKEND] Avvio pipeline avanzata per singole dipendenze...", flush=True)
-    print(f"[DEBUG] Parametri analisi dipendenze: repo_url={repo_url}, branch={branch}, path_dipendenze={path_file}", flush=True)
-    
+
     match = re.search(r"github\.com/([^/]+)/([^/?#]+)", repo_url)
     owner_repo = f"{match.group(1)}/{match.group(2).replace('.git', '')}" if match else repo_url
     

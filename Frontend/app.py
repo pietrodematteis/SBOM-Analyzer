@@ -323,36 +323,45 @@ if st.session_state.analysis_results is not None:
     with st.container(height=1000):
         if dependencies:
             
-            col_tipo, col_comp, col_type, col_sorg, col_req, col_poe, col_az = st.columns([1, 2, 1.5, 3, 1.5, 1.5, 1.5])
-            with col_tipo: st.markdown("**Tipo**")
-            with col_comp: st.markdown("**Componente**")
-            with col_type: st.markdown("**Tipo Componente**")
-            with col_sorg: st.markdown("**Sorgente / PURL**")
-            with col_req:  st.markdown("**In Requirements**")
-            with col_poe:  st.markdown("**In Poetry**")
-            with col_az:   st.markdown("**SBOM**")
+            all_columns = {
+                "type": "Tipo",
+                "name": "Componente",
+                "component_type": "Tipo Componente",
+                "url": "Sorgente / PURL",
+                "present_in_requirements": "In Requirements",
+                "present_in_poetry": "In Poetry"
+            }
+
+            # Filtriamo le colonne in base al valore ricevuto nel primo elemento (se esiste)
+            # Se il primo elemento ha "N/A" per una colonna, la escludiamo dal rendering
+            print ("DEBUG: dependencies[0] = ", dependencies[0] if dependencies else {})
+            first_item = dependencies[0] if dependencies else {}
+            visible_keys = [
+                k for k in all_columns.keys() 
+                if k not in ["present_in_requirements", "present_in_poetry"] 
+                or first_item.get(k) != "N/A"
+            ]
+
+            # Calcoliamo i pesi (width) in base a quante colonne stiamo mostrando
+            cols = st.columns([1, 2, 1.5, 3] + [1.5] * (len(visible_keys) - 4) + [1.5])
+            headers = [all_columns[k] for k in visible_keys] + ["SBOM"]
+
+            for i, h in enumerate(headers):
+                cols[i].markdown(f"**{h}**")
             st.markdown("---")
 
+            # Rendering righe
             for idx, item in enumerate(dependencies):
+                row_cols = st.columns([1, 2, 1.5, 3] + [1.5] * (len(visible_keys) - 4) + [1.5])
                 
-                # Estrazione dinamica dei dati di ogni dipendenza, con gestione
-                c_tipo = item.get("type", "-")
-                c_name = item.get("name", "-")
-                c_type = item.get("component_type", "-")
-                c_url  = item.get("url", "-")
-                c_req  = item.get("present_in_requirements", "❌")
-                c_poe  = item.get("present_in_poetry", "❌")
+                c_url = item.get("url", "")
+                c_tipo = item.get("type", "")
                 
-                # Creazione dinamica di una riga per ogni dipendenza, con possibilità di scaricare lo SBOM specifico di quella riga se disponibile
-                r_tipo, r_comp, r_type, r_sorg, r_req, r_poe, r_az = st.columns([1, 2, 1.5, 3, 1.5, 1.5, 1.5])
-                with r_tipo: st.write(c_tipo)
-                with r_comp: st.write(c_name)
-                with r_type: st.write(c_type)
-                with r_sorg: st.write(c_url)
-                with r_req:  st.write(c_req)
-                with r_poe:  st.write(c_poe)
+                for i, key in enumerate(visible_keys):
+                    row_cols[i].write(item.get(key, "-"))
                 
-                with r_az:
+                # Colonna SBOM
+                with row_cols[-1]:
                     
                     # Creazione di un nome pulito per il file SBOM da scaricare, basato su URL e tipo, con sostituzione dei caratteri non alfanumerici
                     url_clean = re.sub(r'[^a-zA-Z0-9]', '-', c_url.replace("https://", "").replace("http://", ""))
